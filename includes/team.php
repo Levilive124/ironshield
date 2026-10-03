@@ -182,6 +182,9 @@ function team_sync_persistent_backup(string $primaryDirectory): void
 
 function team_store(callable $callback, bool $write = false): mixed
 {
+    if (ironshield_storage_enabled()) {
+        return ironshield_state_change('team_store', ['users' => [], 'tickets' => [], 'announcements' => []], $callback, $write);
+    }
     $directory = team_data_dir();
     if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) {
         throw new RuntimeException('Der private Team-Datenspeicher konnte nicht angelegt werden.');
@@ -294,33 +297,46 @@ function team_save_attachments(): array
     if (!is_array($files) || !isset($files['name']) || !is_array($files['name'])) return [];
     $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp', 'video/mp4' => 'mp4', 'video/webm' => 'webm', 'video/quicktime' => 'mov'];
     $pending = [];
+    $totalSize = 0;
     foreach ($files['name'] as $index => $originalName) {
         $error = (int)($files['error'][$index] ?? UPLOAD_ERR_NO_FILE);
         if ($error === UPLOAD_ERR_NO_FILE) continue;
         if ($error !== UPLOAD_ERR_OK) throw new RuntimeException($error === UPLOAD_ERR_INI_SIZE || $error === UPLOAD_ERR_FORM_SIZE ? 'Eine Datei ist zu groß. Pro Datei sind maximal 5 MB erlaubt.' : 'Mindestens eine Datei konnte nicht hochgeladen werden.');
         $size = (int)($files['size'][$index] ?? 0);
+        $totalSize += $size;
         $temporaryPath = (string)($files['tmp_name'][$index] ?? '');
         if ($size < 1 || $size > 5 * 1024 * 1024 || !is_uploaded_file($temporaryPath)) throw new RuntimeException('Dateien müssen echte Uploads mit maximal 5 MB sein.');
         $pending[] = [$index, (string)$originalName, $temporaryPath, $size];
     }
     if (count($pending) > 3) throw new RuntimeException('Du kannst höchstens 3 Medien pro Nachricht anhängen.');
+    if (strtolower((string)(getenv('VERCEL') ?: '')) === '1' && $totalSize > 4 * 1024 * 1024) throw new RuntimeException('Vercel erlaubt maximal 4 MB Anhänge pro Nachricht. Bitte hänge weniger oder kleinere Dateien an.');
     if (!$pending) return [];
     $directory = team_data_dir() . DIRECTORY_SEPARATOR . 'attachments';
-    if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) throw new RuntimeException('Der private Medienordner konnte nicht angelegt werden.');
-    @chmod($directory, 0700);
+    if (!ironshield_storage_enabled() && !is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) throw new RuntimeException('Der private Medienordner konnte nicht angelegt werden.');
+    if (!ironshield_storage_enabled()) @chmod($directory, 0700);
     $saved = [];
     try {
         foreach ($pending as [$index, $originalName, $temporaryPath, $size]) {
             $mime = team_detect_mime($temporaryPath);
             if (!isset($allowed[$mime])) throw new RuntimeException('Erlaubt sind Bilder (JPG, PNG, GIF, WebP) und Videos (MP4, WebM, MOV).');
             $id = bin2hex(random_bytes(20));
-            $storedPath = $directory . DIRECTORY_SEPARATOR . $id . '.' . $allowed[$mime];
-            if (!move_uploaded_file($temporaryPath, $storedPath)) throw new RuntimeException('Eine Datei konnte nicht sicher gespeichert werden.');
-            @chmod($storedPath, 0600);
-            $saved[] = ['id' => $id, 'name' => team_safe_filename($originalName), 'mime' => $mime, 'size' => $size];
+            $safeName = team_safe_filename($originalName);
+            if (ironshield_storage_enabled()) {
+                $bytes = @file_get_contents($temporaryPath);
+                if (!is_string($bytes) || strlen($bytes) !== $size) throw new RuntimeException('Eine Datei konnte nicht sicher gelesen werden.');
+                ironshield_attachment_save($id, $mime, $safeName, $bytes);
+            } else {
+                $storedPath = $directory . DIRECTORY_SEPARATOR . $id . '.' . $allowed[$mime];
+                if (!move_uploaded_file($temporaryPath, $storedPath)) throw new RuntimeException('Eine Datei konnte nicht sicher gespeichert werden.');
+                @chmod($storedPath, 0600);
+            }
+            $saved[] = ['id' => $id, 'name' => $safeName, 'mime' => $mime, 'size' => $size];
         }
     } catch (Throwable $error) {
-        foreach ($saved as $attachment) @unlink($directory . DIRECTORY_SEPARATOR . $attachment['id'] . '.' . $allowed[$attachment['mime']]);
+        foreach ($saved as $attachment) {
+            if (ironshield_storage_enabled()) ironshield_attachment_delete((string)$attachment['id']);
+            else @unlink($directory . DIRECTORY_SEPARATOR . $attachment['id'] . '.' . $allowed[$attachment['mime']]);
+        }
         throw $error;
     }
     return $saved;
@@ -379,7 +395,8 @@ function team_ticket_category(string $category): string
 
 function team_redirect(string $route, string $message = ''): never
 {
-    $url = '/?route=' . rawurlencode($route);
+    $staticPages = ['team_login' => '/team-login.html', 'team' => '/team.html', 'support' => '/support.html', 'ticket' => '/ticket.html'];
+    $url = $staticPages[$route] ?? ('/?route=' . rawurlencode($route));
     if ($message !== '') $url .= '&message=' . rawurlencode($message);
     header('Location: ' . $url, true, 303);
     exit;
@@ -389,7 +406,7 @@ function team_page_start(string $title, bool $teamArea = false): void
 {
     $safeTitle = team_e($title);
     $isTeam = team_user() !== null;
-    echo '<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090c11"><title>' . $safeTitle . ' · Iron Shield</title><link rel="icon" href="/assets/bot-logo.webp?v=20261001-ticketthreads1"><link rel="stylesheet" href="/assets/styles.php?v=20261001-ticketthreads1"><style>
+    echo '<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090c11"><title>' . $safeTitle . ' · Iron Shield</title><link rel="icon" href="/assets/bot-logo.webp?v=20261001-ticketthreads1"><link rel="stylesheet" href="/assets/styles.css"><style>
     .portal-wrap{width:min(1100px,calc(100% - 40px));margin:0 auto;padding:50px 0 90px}.portal-head{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:15px 0;border-bottom:1px solid var(--line)}.portal-brand{display:flex;align-items:center;gap:12px;color:var(--text);text-decoration:none;font:600 13px var(--display);letter-spacing:.12em}.portal-brand img{width:34px;height:34px;object-fit:contain}.portal-links{display:flex;align-items:center;gap:18px}.portal-links a{color:var(--text);text-decoration:none;font-size:12px}.portal-title{font:500 clamp(36px,6vw,58px)/1.05 var(--display);letter-spacing:-.055em;margin:45px 0 12px}.portal-subtitle,.portal-muted{color:var(--muted);line-height:1.7}.portal-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px;margin:16px 0}.portal-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.portal-label{display:block;color:var(--muted);font-size:11px;margin:13px 0 6px}.portal-input,.portal-select,.portal-textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--text);padding:12px;font:inherit}.portal-textarea{min-height:130px;resize:vertical}.portal-button{border:0;border-radius:999px;padding:12px 18px;background:var(--green);color:#101810;font-weight:700;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:8px}.portal-button.secondary{background:transparent;border:1px solid var(--line);color:var(--text)}.portal-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:17px}.portal-flash{padding:12px 15px;border:1px solid var(--line);border-radius:10px;margin-top:18px;color:var(--green)}.portal-ticket{display:block;color:var(--text);text-decoration:none}.portal-ticket:hover{border-color:var(--green)}.portal-meta{font-size:11px;color:var(--muted)}.portal-message{white-space:pre-wrap;line-height:1.65;margin:8px 0}.portal-perms{display:flex;flex-wrap:wrap;gap:14px;margin:12px 0}.portal-perms label{font-size:12px;color:var(--muted)}.portal-perms input{accent-color:var(--green)}@media(max-width:640px){.portal-wrap{padding-top:22px}.portal-head{align-items:flex-start}.portal-links{gap:10px;flex-wrap:wrap;justify-content:flex-end}.portal-card{padding:16px}}
     </style></head><body><div class="ambient ambient-one"></div><div class="ambient ambient-two"></div><header class="portal-head" style="width:min(1100px,calc(100% - 40px));margin:auto"><a class="portal-brand" href="/" aria-label="Zur Startseite"><img src="/assets/bot-logo.webp?v=20261001-ticketthreads1" alt="">IRON SHIELD</a><nav class="portal-links"><a href="/?route=support">Ticket-Support</a>';
     if ($isTeam) echo '<a href="/?route=team">Team</a><form method="post" action="/?route=team_logout" style="margin:0"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><button class="portal-button secondary" type="submit">Abmelden</button></form>';
@@ -455,10 +472,12 @@ function team_handle_request(string $route): void
         if (!$ticket) json_response(404, ['error' => 'Ticket nicht gefunden oder kein Zugriff.']);
         $messages = is_array($ticket['messages'] ?? null) ? $ticket['messages'] : [];
         $html = '';
+        $newMessages = [];
         foreach (array_slice($messages, $after, null, true) as $message) {
+            $newMessages[] = ['authorName' => (string)($message['authorName'] ?? 'Nutzer'), 'team' => !empty($message['team']), 'body' => (string)($message['body'] ?? ''), 'createdAt' => (int)($message['createdAt'] ?? time()), 'attachments' => is_array($message['attachments'] ?? null) ? $message['attachments'] : []];
             $html .= '<article class="portal-card ticket-message ' . (!empty($message['team']) ? 'from-team' : 'from-user') . '"><strong>' . (!empty($message['team']) ? '<span class="team-message-tag">TEAM</span> ' : '') . team_e((string)($message['authorName'] ?? 'Nutzer')) . '</strong><span class="portal-meta"> · ' . date('d.m.Y H:i', (int)($message['createdAt'] ?? time())) . '</span><p class="portal-message">' . team_e((string)($message['body'] ?? '')) . '</p>' . team_render_attachments(is_array($message['attachments'] ?? null) ? $message['attachments'] : [], $id) . '</article>';
         }
-        json_response(200, ['html' => $html, 'count' => count($messages), 'status' => (string)($ticket['status'] ?? 'closed')]);
+        json_response(200, ['messages' => $newMessages, 'html' => $html, 'count' => count($messages), 'status' => (string)($ticket['status'] ?? 'closed')]);
     }
     if ($route === 'ticket_attachment') {
         $id = (string)($_GET['id'] ?? ''); $attachmentId = (string)($_GET['file'] ?? '');
@@ -472,12 +491,21 @@ function team_handle_request(string $route): void
         });
         $extensions = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp', 'video/mp4' => 'mp4', 'video/webm' => 'webm', 'video/quicktime' => 'mov'];
         $mime = is_array($attachment) ? (string)($attachment['mime'] ?? '') : '';
-        $path = isset($extensions[$mime]) ? team_data_dir() . DIRECTORY_SEPARATOR . 'attachments' . DIRECTORY_SEPARATOR . $attachmentId . '.' . $extensions[$mime] : '';
-        if ($path === '' || !is_file($path) || team_detect_mime($path) !== $mime) { http_response_code(404); exit; }
+        if (!isset($extensions[$mime])) { http_response_code(404); exit; }
+        if (ironshield_storage_enabled()) {
+            $stored = ironshield_attachment_get($attachmentId);
+            if (!is_array($stored) || !hash_equals($mime, (string)$stored['mime'])) { http_response_code(404); exit; }
+            $bytes = $stored['data'];
+        } else {
+            $path = team_data_dir() . DIRECTORY_SEPARATOR . 'attachments' . DIRECTORY_SEPARATOR . $attachmentId . '.' . $extensions[$mime];
+            if (!is_file($path) || team_detect_mime($path) !== $mime) { http_response_code(404); exit; }
+            $bytes = @file_get_contents($path);
+            if (!is_string($bytes)) { http_response_code(404); exit; }
+        }
         $filename = rawurlencode(team_safe_filename((string)($attachment['name'] ?? 'Anhang')));
-        header('Content-Type: ' . $mime); header('Content-Length: ' . (string)filesize($path)); header('Content-Disposition: inline; filename="attachment"; filename*=UTF-8\'\'' . $filename);
+        header('Content-Type: ' . $mime); header('Content-Length: ' . (string)strlen($bytes)); header('Content-Disposition: inline; filename="attachment"; filename*=UTF-8\'\'' . $filename);
         header('Cache-Control: private, no-store, max-age=0'); header('X-Content-Type-Options: nosniff'); header("Content-Security-Policy: default-src 'none'; img-src 'self'; media-src 'self'; sandbox");
-        readfile($path); exit;
+        echo $bytes; exit;
     }
     if (in_array($route, ['team_create_user', 'team_permissions', 'team_reset_password', 'ticket_create', 'ticket_reply', 'ticket_close', 'ticket_claim', 'announcement_create', 'announcement_delete'], true) && $_SERVER['REQUEST_METHOD'] === 'POST') {
         team_verify_csrf();
@@ -559,14 +587,14 @@ function team_handle_request(string $route): void
             $id = bin2hex(random_bytes(8)); $owner = $_SESSION['user']; $now = time();
             $ticket = ['id' => $id, 'subject' => $subject, 'category' => $category, 'priority' => $priority, 'serverName' => $serverName, 'serverId' => $serverId, 'tried' => $tried, 'ownerId' => $owner['id'], 'ownerName' => $owner['username'], 'assignedTo' => null, 'assignedName' => null, 'status' => 'open', 'createdAt' => $now, 'updatedAt' => $now, 'messages' => [['authorId' => $owner['id'], 'authorName' => $owner['username'], 'team' => false, 'body' => $body, 'attachments' => $attachments, 'createdAt' => $now]]];
             team_store(static function (array &$data) use ($ticket): void { $data['tickets'][] = $ticket; }, true);
-            header('Location: /?route=ticket&id=' . rawurlencode($id) . '&message=' . rawurlencode('Ticket wurde gespeichert. Es wurde nichts an Discord gesendet oder dort erstellt.'), true, 303);
+            header('Location: /ticket.html?id=' . rawurlencode($id) . '&message=' . rawurlencode('Ticket wurde gespeichert. Es wurde nichts an Discord gesendet oder dort erstellt.'), true, 303);
             exit;
         }
         if ($route === 'ticket_reply') {
             $id = (string)($_POST['id'] ?? ''); $body = trim((string)($_POST['body'] ?? ''));
             $staff = team_user(); $discordUser = $_SESSION['user'] ?? null;
             if (($staff && !team_has('tickets_reply')) || (!$staff && !$discordUser)) team_redirect('support', 'Du darfst hier nicht antworten.');
-            if ($body === '' || team_length($body) > 10000) { header('Location: /?route=ticket&id=' . rawurlencode($id) . '&message=' . rawurlencode('Nachricht ist leer oder zu lang.'), true, 303); exit; }
+            if ($body === '' || team_length($body) > 10000) { header('Location: /ticket.html?id=' . rawurlencode($id) . '&message=' . rawurlencode('Nachricht ist leer oder zu lang.'), true, 303); exit; }
             $attachments = team_save_attachments();
             team_store(static function (array &$data) use ($id, $body, $staff, $discordUser, $attachments): void {
                 foreach ($data['tickets'] as &$ticket) if (($ticket['id'] ?? '') === $id) {
@@ -579,7 +607,7 @@ function team_handle_request(string $route): void
                 }
                 throw new RuntimeException('Ticket wurde nicht gefunden.');
             }, true);
-            header('Location: /?route=ticket&id=' . rawurlencode($id) . '&message=' . rawurlencode('Antwort wurde gesendet.'), true, 303); exit;
+            header('Location: /ticket.html?id=' . rawurlencode($id) . '&message=' . rawurlencode('Antwort wurde gesendet.'), true, 303); exit;
         }
         if ($route === 'ticket_claim') {
             $staff = team_user(); $id = (string)($_POST['id'] ?? '');
@@ -592,7 +620,7 @@ function team_handle_request(string $route): void
                 }
                 throw new RuntimeException('Ticket wurde nicht gefunden.');
             }, true);
-            header('Location: /?route=ticket&id=' . rawurlencode($id) . '&message=' . rawurlencode('Ticket wurde dir zugewiesen.'), true, 303); exit;
+            header('Location: /ticket.html?id=' . rawurlencode($id) . '&message=' . rawurlencode('Ticket wurde dir zugewiesen.'), true, 303); exit;
         }
         if ($route === 'ticket_close') {
             $id = (string)($_POST['id'] ?? '');
@@ -604,7 +632,19 @@ function team_handle_request(string $route): void
                 }
                 throw new RuntimeException('Ticket wurde nicht gefunden.');
             }, true);
-            header('Location: /?route=ticket&id=' . rawurlencode($id) . '&message=' . rawurlencode('Ticket geschlossen.'), true, 303); exit;
+            header('Location: /ticket.html?id=' . rawurlencode($id) . '&message=' . rawurlencode('Ticket geschlossen.'), true, 303); exit;
+        }
+    }
+    if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+        $pageRoutes = ['team_login' => '/team-login.html', 'team' => '/team.html', 'support' => '/support.html', 'ticket' => '/ticket.html'];
+        if (isset($pageRoutes[$route])) {
+            $target = $pageRoutes[$route];
+            $query = [];
+            if ($route === 'ticket' && isset($_GET['id'])) $query['id'] = (string)$_GET['id'];
+            if (isset($_GET['message'])) $query['message'] = (string)$_GET['message'];
+            if ($query) $target .= '?' . http_build_query($query);
+            header('Location: ' . $target, true, 302);
+            exit;
         }
     }
     if ($route === 'team_login') {
@@ -617,8 +657,9 @@ function team_handle_request(string $route): void
         if (team_has('users_manage')) {
             $storageStats = team_store(static fn(array &$data): array => ['users' => count($data['users'] ?? []), 'tickets' => count($data['tickets'] ?? []), 'announcements' => count($data['announcements'] ?? [])]);
             $storePath = team_data_dir() . DIRECTORY_SEPARATOR . 'store.json';
-            $storeModified = is_file($storePath) ? date('d.m.Y H:i:s', (int)filemtime($storePath)) : 'noch nicht geschrieben';
-            echo '<section class="portal-card"><span class="portal-kicker">PERSISTENZ</span><h2>Datenspeicher</h2><p class="portal-muted">' . (int)$storageStats['users'] . ' Teamkonten · ' . (int)$storageStats['tickets'] . ' Tickets · ' . (int)$storageStats['announcements'] . ' Ankündigungen</p><p class="portal-meta">Speicherdatei: <code>' . team_e($storePath) . '</code><br>Letzte Speicherung: ' . team_e($storeModified) . '</p></section>';
+            $storeModified = ironshield_storage_enabled() ? 'dauerhafte PostgreSQL-Datenbank' : (is_file($storePath) ? date('d.m.Y H:i:s', (int)filemtime($storePath)) : 'noch nicht geschrieben');
+            $storeLabel = ironshield_storage_enabled() ? 'Speicher: ' : 'Speicherdatei: ';
+            echo '<section class="portal-card"><span class="portal-kicker">PERSISTENZ</span><h2>Datenspeicher</h2><p class="portal-muted">' . (int)$storageStats['users'] . ' Teamkonten · ' . (int)$storageStats['tickets'] . ' Tickets · ' . (int)$storageStats['announcements'] . ' Ankündigungen</p><p class="portal-meta">' . $storeLabel . '<code>' . team_e($storeModified === 'dauerhafte PostgreSQL-Datenbank' ? $storeModified : $storePath) . '</code><br>Letzte Speicherung: ' . team_e($storeModified) . '</p></section>';
         }
         if (!empty($_SESSION['team_password_notice'])) {
             $notice = $_SESSION['team_password_notice']; unset($_SESSION['team_password_notice']);
@@ -688,4 +729,3 @@ function team_handle_request(string $route): void
         team_page_end(); exit;
     }
 }
-

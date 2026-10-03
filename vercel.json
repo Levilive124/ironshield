@@ -7,7 +7,13 @@
   },
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/",
+      "has": [
+        {
+          "type": "query",
+          "key": "route"
+        }
+      ],
       "destination": "/api/index.php"
     }
   ]

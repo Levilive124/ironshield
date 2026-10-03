@@ -318,7 +318,7 @@ $document = $documents[$page];
   <meta name="theme-color" content="#090c11" />
   <title><?= htmlspecialchars($document['title'], ENT_QUOTES, 'UTF-8') ?> — Iron Shield</title>
   <link rel="icon" type="image/webp" href="/assets/bot-logo.webp?v=20261001-ticketthreads1" />
-  <link rel="stylesheet" href="/assets/styles.php?v=20261001-ticketthreads1" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20261001-ticketthreads1" />
 </head>
 <body class="legal-body">
   <header class="site-header legal-header">
@@ -336,4 +336,3 @@ $document = $documents[$page];
   <footer class="site-footer section-wrap legal-footer"><a class="brand footer-brand" href="/"><span class="brand-mark"><img src="/assets/bot-logo.webp?v=20261001-ticketthreads1" alt="" /></span><span class="brand-name">IRON<span>SHIELD</span></span></a><nav class="footer-legal"><a href="/includes/recht.php?seite=datenschutz">Datenschutz</a><a href="/includes/recht.php?seite=nutzungsbedingungen">Nutzungsbedingungen</a><a href="/includes/recht.php?seite=impressum">Impressum</a></nav><a class="back-top" href="#top">NACH OBEN <span>↑</span></a></footer>
 </body>
 </html>
-

@@ -1,6 +1,6 @@
 # Vercel-Migration
 
-Die Anwendung wird serverseitig von `index.php` gerendert und verwendet PHP für Discord-OAuth, Team-Login, Tickets und Datei-Anhänge. `api/index.php` und `vercel.json` leiten Web-Anfragen an die PHP-Funktion weiter; statische Dateien aus `assets/` bleiben Teil des Deployments.
+Die öffentliche Startseite liegt als statisches `index.html` vor; Styles und Startseiten-Script liegen als `.css` und `.js` vor. Für vorhandene dynamische Funktionen (Discord-OAuth, Dashboard und Ticketportal) leitet Vercel Aufrufe mit `?route=...` an `api/index.php` weiter. Diese dynamischen Ansichten und die PHP-API sind noch nicht vollständig auf HTML/JavaScript plus Node-API migriert.
 
 ## Vor einem Live-Umzug zwingend erledigen
 

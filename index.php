@@ -18,6 +18,7 @@ function load_env_file(string $path): void
 load_env_file(__DIR__ . '/.env');
 define('IRONSHIELD_APP', true);
 require_once __DIR__ . '/bot/discord.php';
+require_once __DIR__ . '/includes/storage.php';
 if (PHP_SAPI === 'cli-server') {
     $requestPath = rawurldecode((string)(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/'));
     if (preg_match('#(?:^|/)\.(?!well-known(?:/|$))#', $requestPath) === 1) {
@@ -52,6 +53,7 @@ ini_set('session.use_trans_sid', '0');
 ini_set('session.gc_maxlifetime', '28800');
 session_name('is_sess');
 session_set_cookie_params(['lifetime' => 28800, 'path' => '/', 'secure' => $secureCookie, 'httponly' => true, 'samesite' => 'Lax']);
+if (ironshield_storage_enabled()) session_set_save_handler(new IronShieldPostgresSessionHandler(), true);
 session_start();
 if (isset($_SESSION['last_activity']) && time() - (int)$_SESSION['last_activity'] > 28800) {
     $_SESSION = [];
@@ -198,6 +200,9 @@ function dashboard_bot_webapi_request(string $command, array $args, string $acto
 }
 
 $route = (string)($_GET['route'] ?? '');
+if (strtolower((string)(getenv('VERCEL') ?: '')) === '1' && !ironshield_storage_enabled() && $route !== '') {
+    json_response(503, ['error' => 'DATABASE_URL ist auf Vercel erforderlich, damit Sitzungen, Tickets und Dashboard-Einstellungen dauerhaft gespeichert werden.']);
+}
 $clientId = config('DISCORD_CLIENT_ID', '1479835689284669461');
 $botClientId = trim(config('DISCORD_BOT_CLIENT_ID')) ?: $clientId;
 
@@ -229,6 +234,9 @@ function dashboard_bridge_secret(): string
 
 function dashboard_bridge_change(callable $callback): mixed
 {
+    if (ironshield_storage_enabled()) {
+        return ironshield_state_change('dashboard_bridge', ['guild_ids' => [], 'checked_guild_ids' => [], 'settings' => [], 'pending' => [], 'last_seen' => 0, 'token_verified_at' => 0, 'bot_id' => ''], $callback, true);
+    }
     $handle = @fopen(dashboard_bridge_file(), 'c+');
     if ($handle === false || !flock($handle, LOCK_EX)) throw new RuntimeException('Privater Dashboard-Speicher ist nicht verfügbar.');
     rewind($handle);
@@ -543,169 +551,138 @@ if ($route === 'dashboard_options') {
     } catch (Throwable $error) { json_response(502, ['error' => 'Discord-Auswahl konnte nicht geladen werden: ' . $error->getMessage()]); }
 }
 
-if ($route === 'dashboard') {
-    if (empty($_SESSION['user'])) { header('Location: /?route=dashboard_login', true, 302); exit; }
+if ($route === 'dashboard_data') {
+    if (empty($_SESSION['user'])) json_response(401, ['error' => 'login_required']);
     if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(24));
-    $guilds = $_SESSION['discord_guilds'] ?? [];
-    $bridgeState = dashboard_bridge_read();
-    $webApiConfigured = config('DASHBOARD_WEBAPI_URL') !== '';
-    $webApiOnline = false;
-    $webApiConnectionError = '';
-    if ($webApiConfigured) {
+    $guilds = is_array($_SESSION['discord_guilds'] ?? null) ? $_SESSION['discord_guilds'] : [];
+    $state = dashboard_bridge_read();
+    $checkedGuildIds = array_map('strval', $state['checked_guild_ids'] ?? []);
+    $presentGuildIds = array_map('strval', $state['guild_ids'] ?? []);
+    $botTokenVerified = (int)($state['token_verified_at'] ?? 0) >= time() - 90;
+    $lastSeen = (int)($state['last_seen'] ?? 0);
+    $connected = $lastSeen >= time() - 90;
+    $connectionError = '';
+    $actorId = (string)($_SESSION['user']['id'] ?? '');
+    if (config('DASHBOARD_WEBAPI_URL') !== '') {
         try {
-            $webApiStatus = dashboard_bot_webapi_request('status.public', [], (string)($_SESSION['user']['id'] ?? ''));
-            $webApiOnline = !empty($webApiStatus['online']);
+            $status = dashboard_bot_webapi_request('status.public', [], $actorId);
+            $connected = !empty($status['online']);
+            if ($connected) $lastSeen = time();
         } catch (Throwable $error) {
-            $webApiConnectionError = $error->getMessage();
+            $connectionError = $error->getMessage();
+            $connected = false;
         }
     }
-    $botGuildIds = array_map('strval', $bridgeState['guild_ids'] ?? []);
-    $checkedGuildIds = array_map('strval', $bridgeState['checked_guild_ids'] ?? []);
-    $botTokenVerified = (int)($bridgeState['token_verified_at'] ?? 0) >= time() - 90;
-    $lastSeen = $webApiConfigured ? ($webApiOnline ? time() : 0) : (int)($bridgeState['last_seen'] ?? 0);
-    $botStatusAvailable = $webApiConfigured ? $webApiOnline : $lastSeen >= time() - 90;
-    $requestHost = strtolower((string)(parse_url('https://' . ($_SERVER['HTTP_HOST'] ?? ''), PHP_URL_HOST) ?: ''));
-    $localDashboard = in_array($requestHost, ['localhost', '127.0.0.1'], true);
-    $botError = $botStatusAvailable ? '' : ($webApiConnectionError !== ''
-        ? 'Bot-WebAPI-Verbindung fehlgeschlagen: ' . $webApiConnectionError
-        : ((int)($bridgeState['cache_fetched_at'] ?? 0) > 0 && isset($bridgeState['relay_error'])
-        ? 'Synchronisierungsfehler: ' . (string)$bridgeState['relay_error']
-        : ($localDashboard
-        ? 'Die lokale Website wartet auf die HTTPS-Synchronisierung des Bots. Prüfe im Bot-Log die Zeile [ironshield-dashboard].'
-        : 'Warte auf die Bot-Synchronisierung. Prüfe im Bot-Log [ironshield-dashboard] sowie PUBLIC_SITE_URL und denselben DASHBOARD_BRIDGE_SECRET (alternativ BOT_WEBHOOK_SECRET) auf beiden Hostern.')));
-    if (config('DISCORD_BOT_CLIENT_ID') === '' && preg_match('/^\d{15,22}$/', (string)($bridgeState['bot_id'] ?? ''))) $botClientId = (string)$bridgeState['bot_id'];
-    $selectedGuild = (string)($_GET['guild'] ?? '');
+    $guildData = [];
+    foreach ($guilds as $guild) {
+        if (!is_array($guild) || empty($guild['id'])) continue;
+        $id = (string)$guild['id'];
+        $guildData[] = [
+            'id' => $id,
+            'name' => (string)($guild['name'] ?? 'Discord-Server'),
+            'icon' => !empty($guild['icon']) ? 'https://cdn.discordapp.com/icons/' . rawurlencode($id) . '/' . rawurlencode((string)$guild['icon']) . '.png?size=96' : '',
+            'manage' => !empty($guild['manage']) || guild_can_manage($guild),
+            'checked' => $botTokenVerified && in_array($id, $checkedGuildIds, true),
+            'present' => $botTokenVerified && in_array($id, $presentGuildIds, true),
+        ];
+    }
+    $selectedGuildId = (string)($_GET['guild'] ?? '');
     $selected = null;
-    foreach ($guilds as $guild) if (($guild['id'] ?? '') === $selectedGuild) $selected = $guild;
-    $selectedCanManage = $selected && (!empty($selected['manage']) || guild_can_manage($selected));
-    $selectedBotStatusKnown = $selected && $botTokenVerified && in_array($selectedGuild, $checkedGuildIds, true);
-    $selectedBotPresent = $selectedBotStatusKnown && in_array($selectedGuild, $botGuildIds, true);
-    $ticketSettings = ['guild' => [], 'panels' => []];
-    $ticketSettingsAvailable = false;
-    if ($selected && $selectedCanManage && $selectedBotPresent) {
-        $ticketSettings = $bridgeState['settings'][$selectedGuild] ?? $ticketSettings;
-        $ticketSettingsAvailable = is_array($ticketSettings) && isset($ticketSettings['guild'], $ticketSettings['panels']);
+    foreach ($guildData as $guild) if ($guild['id'] === $selectedGuildId) { $selected = $guild; break; }
+    $ticketSettings = null;
+    if ($selected && $selected['manage'] && $selected['present']) {
+        $candidate = $state['settings'][$selectedGuildId] ?? null;
+        if (is_array($candidate) && isset($candidate['guild'], $candidate['panels'])) $ticketSettings = $candidate;
     }
-    $botModules = null;
-    $botModulesError = '';
-    if ($selected && $selectedCanManage) {
-        if (config('DASHBOARD_WEBAPI_URL') === '') {
-            $botModulesError = 'Die direkte Bot-WebAPI ist auf dem Website-Host noch nicht konfiguriert.';
-        } else {
-            try {
-                $botModules = dashboard_bot_webapi_request('modules.list', ['guild_id' => $selectedGuild], (string)($_SESSION['user']['id'] ?? ''));
-            } catch (Throwable $error) {
-                $botModulesError = $error->getMessage();
-            }
+    $modules = null;
+    $modulesError = '';
+    if ($selected && $selected['manage']) {
+        if (config('DASHBOARD_WEBAPI_URL') === '') $modulesError = 'Die direkte Bot-WebAPI ist auf dem Website-Host noch nicht konfiguriert.';
+        else {
+            try { $modules = dashboard_bot_webapi_request('modules.list', ['guild_id' => $selectedGuildId], $actorId); }
+            catch (Throwable $error) { $modulesError = $error->getMessage(); }
         }
     }
-    $esc = static fn($value): string => htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-    // Read-only channel access; the bot must not be invited with send/manage permissions.
-    $invitePermissions = (string)(1024 + 65536);
-    $inviteBase = 'https://discord.com/oauth2/authorize?' . http_build_query(['client_id' => $botClientId, 'permissions' => $invitePermissions, 'scope' => 'bot applications.commands']);
-    $dashboardAssetVersion = substr(hash('sha256', (string)(@filemtime(__DIR__ . '/assets/styles.php') . ':' . @filemtime(__DIR__ . '/assets/dashboard-ticket-editor.js'))), 0, 12);
-    header('Content-Type: text/html; charset=utf-8');
-    echo '<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Server-Dashboard · Iron Shield</title><link rel="stylesheet" href="/assets/styles.php?v=' . rawurlencode($dashboardAssetVersion) . '"></head><body class="dashboard-page"><main class="section-wrap dashboard-section"><div class="dashboard-heading"><div><div class="eyebrow">IRON SHIELD · DASHBOARD</div><h2>Deine <span>Server.</span></h2><p>Bot-Status und Einstellungen für deine Discord-Server.</p></div><div class="user-chip">' . $esc($_SESSION['user']['username'] ?? '') . ' · <form method="post" action="/?route=logout"><button class="logout-button" type="submit">Abmelden</button></form></div></div>';
-    $syncAge = $lastSeen > 0 ? max(0, time() - $lastSeen) : null;
-    $syncCaption = $syncAge === null ? 'Noch keine Verbindung gemeldet' : 'Letzter Abgleich vor ' . $syncAge . ' Sekunden';
-    echo '<div class="dashboard-connection ' . ($botStatusAvailable ? 'is-online' : 'is-offline') . '" role="status"><span class="dashboard-connection-dot"></span><div><strong>' . ($botStatusAvailable ? 'Bot verbunden' : 'Warte auf Bot-Verbindung') . '</strong><small data-last-seen="' . $lastSeen . '">' . $esc($syncCaption) . '</small></div></div>';
-    $expectedGuildIds = array_values(array_filter(array_map(static fn(array $guild): string => (string)($guild['id'] ?? ''), $guilds)));
-    $guildCheckedAt = is_array($bridgeState['guild_checked_at'] ?? null) ? $bridgeState['guild_checked_at'] : [];
-    $staleGuildCount = count(array_filter($expectedGuildIds, static fn(string $id): bool => (int)($guildCheckedAt[$id] ?? 0) <= time() - 60));
-    $needsSelectedSettings = $selectedCanManage && $selectedBotPresent && !$ticketSettingsAvailable;
-    $needsDashboardRefresh = $selected
-        ? ($selectedCanManage && (!$selectedBotStatusKnown || $needsSelectedSettings))
-        : (!$botTokenVerified || $staleGuildCount > 0 || (int)($bridgeState['last_seen'] ?? 0) <= time() - 45);
-    if ($needsDashboardRefresh) {
-        $refreshGuildQuery = $selected ? '&guild=' . rawurlencode($selectedGuild) : '';
-        $selectedRefresh = $selected ? 'true' : 'false';
-        echo '<script>(()=>{const selected=' . $selectedRefresh . ';let attempts=0;const refresh=()=>fetch("/?route=dashboard_refresh' . $refreshGuildQuery . '",{credentials:"same-origin",headers:{Accept:"application/json"},cache:"no-store"}).then(r=>r.json()).then(data=>{if(data.error){const note=document.querySelector(".dashboard-message");if(note)note.textContent="Synchronisierungsfehler: "+data.error;return}if(selected){if(data.target_checked&&(!data.bot_present||data.settings_loaded)){window.location.reload();return}if(attempts++<2)window.setTimeout(refresh,1200);else{const note=document.querySelector(".dashboard-message");if(note)note.textContent="Discord braucht gerade länger. Bitte lade diese Serverseite in einem Moment erneut."}return}const ids=(data.batch_guild_ids&&data.batch_guild_ids.length)?data.batch_guild_ids:(data.verified?data.checked_guild_ids||[]:[]);for(const id of ids){const card=[...document.querySelectorAll("[data-guild-card]")].find(item=>item.dataset.guildCard===id);if(!card)continue;const present=(data.guild_ids||[]).includes(id);const status=card.querySelector(".guild-status"),link=card.querySelector("[data-guild-link]"),action=card.querySelector(".guild-invite");if(status){status.textContent=present?"Bot ist auf diesem Server":"Bot ist noch nicht eingeladen";status.classList.toggle("is-present",present)}if(link&&action){if(present){link.href=card.dataset.manageUrl;link.removeAttribute("target");link.removeAttribute("rel");action.className="button button-primary guild-invite";action.textContent="Server verwalten · Ticketing einstellen →"}else if(card.dataset.canManage==="1"){link.href=card.dataset.inviteUrl;link.target="_blank";link.rel="noopener noreferrer";action.className="button button-outline guild-invite";action.textContent="Bot einladen ↗"}}}const pending=(data.pending_guild_ids||[]).length>0,more=!data.check_complete||data.relay_refresh_needed;if(pending){if(attempts++<2)setTimeout(refresh,1600);else{const note=document.querySelector(".dashboard-message");if(note)note.textContent="Discord hat nicht alle Server bestätigt. Die bestätigten Server kannst du bereits verwalten."}}else if(more){if(data.relay_refresh_needed&&data.check_complete&&attempts++>=2){const note=document.querySelector(".dashboard-message");if(note)note.textContent="Die direkte Bot-Verbindung antwortet gerade nicht. Die Serverliste bleibt verfügbar."}else{if(!data.relay_refresh_needed)attempts=0;setTimeout(refresh,180)}}else{attempts=0}}).catch(()=>{if(attempts++<2)setTimeout(refresh,1800)});refresh()})();</script>';
-    }
-    $heartbeatGuildQuery = $selectedCanManage ? '&guild=' . rawurlencode($selectedGuild) : '';
-    echo '<script>(()=>{const badge=document.querySelector(".dashboard-connection"),label=badge?.querySelector("strong"),meta=badge?.querySelector("small");if(!badge||!meta)return;let stamp=Number(meta.dataset.lastSeen||0);const paint=()=>{stamp=Math.max(stamp,Number(meta.dataset.lastSeen||0));if(stamp){meta.textContent="Letzter Abgleich vor "+Math.max(0,Math.floor(Date.now()/1000)-stamp)+" Sekunden"}};const refresh=()=>fetch("/?route=dashboard_refresh' . $heartbeatGuildQuery . '",{credentials:"same-origin",headers:{Accept:"application/json"},cache:"no-store"}).then(response=>response.json()).then(data=>{if(data.last_seen){stamp=Number(data.last_seen);meta.dataset.lastSeen=String(stamp)}const online=Boolean(data.connected);badge.classList.toggle("is-online",online);badge.classList.toggle("is-offline",!online);if(label)label.textContent=online?"Bot verbunden":"Warte auf Bot-Verbindung";paint()}).catch(()=>{});paint();refresh();setInterval(paint,1000);setInterval(refresh,45000)})();</script>';
-    if ($botError !== '') echo '<p class="dashboard-message">' . $esc($botError) . '</p>';
-    if (!empty($_SESSION['dashboard_error'])) { echo '<p class="dashboard-message">' . $esc($_SESSION['dashboard_error']) . '</p>'; unset($_SESSION['dashboard_error']); }
-    if ($selected) {
-        echo '<section class="guild-dialog-content"><p><a class="dashboard-link" href="/?route=dashboard">← Zur Serverübersicht</a></p><h2>' . $esc($selected['name']) . ' verwalten</h2>';
-        if (!$selectedCanManage) {
-            echo '<p>Du brauchst Admin- oder Serververwaltungsrechte, um die Einstellungen zu ändern. Melde dich mit dem passenden Discord-Konto an.</p>';
-        } elseif (!$selectedBotStatusKnown) {
-            echo '<p>Der Serverstatus wurde noch nicht von Discord bestätigt. Die Website aktualisiert die Prüfung im Hintergrund. Prüfe, ob <code>DASHBOARD_BOT_TOKEN</code> auf dem Website-Host gesetzt ist.</p>';
-        } elseif (!$selectedBotPresent) {
-            echo '<p>Der Bot ist auf diesem Server noch nicht eingeladen. Füge ihn hinzu, um das Ticket-System zu konfigurieren.</p><a class="button button-primary" href="' . $esc($inviteBase . '&guild_id=' . rawurlencode($selectedGuild) . '&disable_guild_select=true') . '" target="_blank" rel="noopener noreferrer">Bot einladen ↗</a>';
-        } elseif ($ticketSettingsAvailable) {
-            if (!empty($_SESSION['dashboard_notice'])) { echo '<p class="dashboard-message">' . $esc($_SESSION['dashboard_notice']) . '</p>'; unset($_SESSION['dashboard_notice']); }
-            $commandResult = $bridgeState['command_results'][$selectedGuild] ?? null;
-            $pendingCommand = $bridgeState['pending'][$selectedGuild] ?? null;
-            if (is_array($commandResult)) {
-                echo '<p class="dashboard-message ' . (!empty($commandResult['ok']) ? 'is-success' : 'is-error') . '" role="status">' . $esc($commandResult['message'] ?? 'Synchronisierungsstatus verfügbar.') . '</p>';
-            } elseif (is_array($pendingCommand) && ($pendingCommand['status'] ?? 'queued') === 'failed') {
-                $failedResult = $commandResult['message'] ?? 'Der Bot hat die Änderung abgelehnt. Bitte Einstellungen korrigieren und erneut speichern.';
-                echo '<p class="dashboard-message is-error" role="alert">' . $esc($failedResult) . '</p>';
-            } elseif (is_array($pendingCommand)) {
-                echo '<p class="dashboard-message" role="status">Änderung wartet auf Bestätigung des Ticket-Bots. Der gespeicherte Formularstand bleibt erhalten.</p>';
-            }
-            $ticketConfigJson = json_encode($ticketSettings, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            echo '<div class="dashboard-manage-layout"><nav class="dashboard-manage-nav" aria-label="Verwaltung"><span class="dashboard-manage-nav-title">Verwaltung</span><a class="dashboard-manage-nav-link is-active" href="#ticketsystem" aria-current="page"><span class="dashboard-manage-nav-icon" aria-hidden="true">🎫</span><span class="dashboard-manage-nav-copy"><strong>Ticketsystem</strong><small>Ticketing und Panels</small></span><span class="dashboard-manage-nav-arrow" aria-hidden="true">›</span></a><p class="dashboard-manage-nav-note">Weitere Funktionen werden hier ergänzt.</p></nav><div class="dashboard-manage-content" id="ticketsystem"><p>Stelle Ticketing direkt hier ein. Kanäle und Rollen werden aus Discord geladen; deine Änderungen werden mit dem Bot synchronisiert.</p><form method="post" action="/?route=dashboard_tickets_save" class="portal-card ticket-editor" id="ticket-settings-form"><input type="hidden" name="csrf" value="' . $esc($_SESSION['csrf']) . '"><input type="hidden" name="guild_id" value="' . $esc($selectedGuild) . '"><input type="hidden" name="settings" id="ticket-settings-json" value=""><div id="ticket-editor-root" data-guild="' . $esc($selectedGuild) . '"></div><script type="application/json" id="ticket-settings-data">' . $ticketConfigJson . '</script><p class="portal-meta">Die Einstellungen werden an den Ticket-Cog gesendet. Offene Tickets und Statistiken bleiben geschützt.</p><div class="ticket-editor-submit"><span class="ticket-option-status" id="ticket-option-status">Discord-Auswahlen werden geladen…</span><button class="button button-primary" type="submit">Einstellungen speichern</button></div></form><script src="/assets/dashboard-ticket-editor.js?v=' . rawurlencode($dashboardAssetVersion) . '" defer></script></div></div>';
-        } else {
-            echo '<p>Der Bot ist auf diesem Server. Die Ticket-Einstellungen wurden noch nicht synchronisiert. Prüfe, ob der Dashboard-Cog läuft und PUBLIC_SITE_URL auf die HTTPS-Adresse dieser Website zeigt.</p><a class="button button-primary" href="/?route=dashboard&guild=' . rawurlencode($selectedGuild) . '">Erneut laden</a>';
-        }
-        if ($selectedCanManage) {
-            echo '<section class="dashboard-bot-modules"><div class="dashboard-bot-modules-heading"><div><h3>Bot-Module</h3><p>Module dieses Servers direkt über die sichere Bot-Verbindung verwalten.</p></div></div>';
-            if (!empty($_SESSION['dashboard_notice'])) { echo '<p class="dashboard-message is-success" role="status">' . $esc($_SESSION['dashboard_notice']) . '</p>'; unset($_SESSION['dashboard_notice']); }
-            if (!empty($_SESSION['dashboard_error'])) { echo '<p class="dashboard-message is-error" role="alert">' . $esc($_SESSION['dashboard_error']) . '</p>'; unset($_SESSION['dashboard_error']); }
-            if ($botModulesError !== '') {
-                echo '<p class="dashboard-message is-error" role="alert">Bot-WebAPI-Verbindung fehlgeschlagen: ' . $esc($botModulesError) . '</p>';
-            } elseif (!is_array($botModules['categories'] ?? null)) {
-                echo '<p class="dashboard-message is-error" role="alert">Der Bot hat keine Modulübersicht geliefert.</p>';
-            } else {
-                foreach ($botModules['categories'] as $category) {
-                    if (!is_array($category)) continue;
-                    $categoryLabel = is_array($category['label'] ?? null) ? ($category['label']['de'] ?? 'Module') : ($category['label'] ?? 'Module');
-                    echo '<div class="dashboard-bot-module-category"><h4>' . $esc($categoryLabel) . '</h4><div class="dashboard-bot-module-list">';
-                    foreach (($category['modules'] ?? []) as $module) {
-                        if (!is_array($module)) continue;
-                        $moduleKey = (string)($module['key'] ?? '');
-                        if (preg_match('/^[a-z0-9_-]{1,80}$/', $moduleKey) !== 1) continue;
-                        $moduleLabel = is_array($module['label'] ?? null) ? ($module['label']['de'] ?? $moduleKey) : ($module['label'] ?? $moduleKey);
-                        $moduleDescription = is_array($module['desc'] ?? null) ? ($module['desc']['de'] ?? '') : ($module['desc'] ?? '');
-                        $enabled = !empty($module['enabled']);
-                        echo '<form method="post" action="/?route=dashboard_module_save" class="dashboard-bot-module-row"><input type="hidden" name="csrf" value="' . $esc($_SESSION['csrf']) . '"><input type="hidden" name="guild_id" value="' . $esc($selectedGuild) . '"><input type="hidden" name="module_key" value="' . $esc($moduleKey) . '"><input type="hidden" name="enabled" value="0"><label class="dashboard-bot-module-copy"><span><strong>' . $esc($moduleLabel) . '</strong><small>' . $esc($moduleDescription) . '</small></span><input type="checkbox" name="enabled" value="1"' . ($enabled ? ' checked' : '') . ' aria-label="' . $esc($moduleLabel) . ' aktivieren"></label><button class="button button-outline" type="submit">Speichern</button></form>';
-                    }
-                    echo '</div></div>';
-                }
-            }
-            echo '</section>';
-        }
-        echo '</section>';
-    } else {
-        echo '<div class="guild-toolbar"><span>' . count($guilds) . ' Server, auf denen du Mitglied bist</span></div><div class="guild-grid">';
-        foreach ($guilds as $guild) {
-            $id = (string)$guild['id']; $known = $botTokenVerified && in_array($id, $checkedGuildIds, true); $present = $known && in_array($id, $botGuildIds, true); $canManage = !empty($guild['manage']) || guild_can_manage($guild); $icon = !empty($guild['icon']) ? 'https://cdn.discordapp.com/icons/' . rawurlencode($id) . '/' . rawurlencode($guild['icon']) . '.png?size=96' : '';
-            $manageUrl = '/?route=dashboard&guild=' . rawurlencode($id);
-            $status = $present ? 'Bot ist auf diesem Server' : ($known ? 'Bot ist noch nicht eingeladen' : 'Bot-Status wird ermittelt');
-            // Only send admins directly to Discord's install flow. Everyone can
-            // open the server page, where permissions are checked again.
-            $guildInviteUrl = $inviteBase . '&guild_id=' . rawurlencode($id) . '&disable_guild_select=true';
-            $target = $known && !$present && $canManage
-                ? $guildInviteUrl
-                : $manageUrl;
-            $newTab = $known && !$present && $canManage;
-            $action = !$canManage
-                ? 'Server öffnen →'
-                : ($present
-                    ? 'Server verwalten · Ticketing einstellen →'
-                    : (!$known ? 'Serverstatus prüfen →' : 'Bot einladen ↗'));
-            $buttonClass = $known && !$present && $canManage ? 'button-outline' : 'button-primary';
-            echo '<article class="guild-card" data-guild-card="' . $esc($id) . '" data-manage-url="' . $esc($manageUrl) . '" data-invite-url="' . $esc($guildInviteUrl) . '" data-can-manage="' . ($canManage ? '1' : '0') . '"><a class="guild-open guild-card-link" data-guild-link href="' . $esc($target) . '"' . ($newTab ? ' target="_blank" rel="noopener noreferrer"' : '') . '><div class="guild-icon">' . ($icon !== '' ? '<img src="' . $esc($icon) . '" loading="lazy" decoding="async" alt="">' : $esc(text_initial((string)$guild['name']))) . '</div><div class="guild-details"><h3>' . $esc($guild['name']) . '</h3><p class="guild-status ' . ($known && $present ? 'is-present' : '') . '">' . $esc($status) . '</p></div><span class="button ' . $buttonClass . ' guild-invite">' . $action . '</span></a></article>';
-        }
-        if (!$guilds) echo '<p>Discord hat keine Server zurückgegeben. Bitte melde dich erneut über Discord an.</p>';
-        echo '</div>';
-    }
-    echo '</main></body></html>'; exit;
+    $relayError = (string)($state['relay_error'] ?? '');
+    json_response(200, [
+        'user' => ['id' => $actorId, 'username' => (string)($_SESSION['user']['username'] ?? '')],
+        'csrf' => (string)$_SESSION['csrf'],
+        'guilds' => $guildData,
+        'selected' => $selected,
+        'connected' => $connected,
+        'last_seen' => $lastSeen,
+        'connection_error' => $connectionError,
+        'relay_error' => $relayError,
+        'bot_token_verified' => $botTokenVerified,
+        'ticket_settings' => $ticketSettings,
+        'modules' => $modules,
+        'modules_error' => $modulesError,
+        'invite_base' => 'https://discord.com/oauth2/authorize?' . http_build_query(['client_id' => $botClientId, 'permissions' => (string)(1024 + 65536), 'scope' => 'bot applications.commands']),
+    ]);
+}
+
+if ($route === 'dashboard' && !empty($_SESSION['user'])) {
+    $target = '/dashboard.html';
+    if (isset($_GET['guild'])) $target .= '?guild=' . rawurlencode((string)$_GET['guild']);
+    header('Location: ' . $target, true, 302);
+    exit;
+}
+
+if ($route === 'dashboard') {
+    header('Location: /?route=dashboard_login', true, 302);
+    exit;
 }
 
 require_once __DIR__ . '/includes/team.php';
+if ($route === 'team_data') {
+    try { team_bootstrap_admin(); }
+    catch (Throwable $error) { error_log('Iron Shield data bootstrap failed: ' . get_class($error)); json_response(503, ['error' => 'Support-Datenspeicher ist nicht verfügbar.']); }
+    $view = (string)($_GET['view'] ?? 'support');
+    if (!in_array($view, ['support', 'ticket', 'team', 'team_login'], true)) json_response(400, ['error' => 'invalid_view']);
+    if (empty($_SESSION['team_csrf'])) $_SESSION['team_csrf'] = bin2hex(random_bytes(24));
+    $staff = team_user();
+    $discordUser = $_SESSION['user'] ?? null;
+    $result = [
+        'view' => $view,
+        'csrf' => team_csrf(),
+        'max_attachment_bytes' => strtolower((string)(getenv('VERCEL') ?: '')) === '1' ? 4 * 1024 * 1024 : 15 * 1024 * 1024,
+        'staff' => $staff,
+        'discord_user' => is_array($discordUser) ? ['id' => (string)($discordUser['id'] ?? ''), 'username' => (string)($discordUser['username'] ?? '')] : null,
+        'guilds' => is_array($_SESSION['discord_guilds'] ?? null) ? array_map(static fn(array $guild): array => ['id' => (string)($guild['id'] ?? ''), 'name' => (string)($guild['name'] ?? '')], array_filter($_SESSION['discord_guilds'], 'is_array')) : [],
+        'announcements' => [],
+    ];
+    if ($view === 'team_login') json_response(200, ['view' => $view, 'csrf' => team_csrf(), 'signed_in' => $staff !== null]);
+    if ($view === 'team' && !$staff) json_response(401, ['error' => 'team_login_required']);
+    if ($view === 'support' && !$staff && !$discordUser) json_response(401, ['error' => 'login_required']);
+    $store = team_store(static function (array &$data): array { return ['users' => $data['users'] ?? [], 'tickets' => $data['tickets'] ?? [], 'announcements' => $data['announcements'] ?? []]; });
+    if ($view === 'team' || $view === 'support') {
+        $canViewAll = $staff !== null && team_has('tickets_view');
+        $result['tickets'] = array_values(array_filter($store['tickets'], static fn($ticket): bool => is_array($ticket) && ($canViewAll || ($discordUser && (string)($ticket['ownerId'] ?? '') === (string)($discordUser['id'] ?? '')))));
+        usort($result['tickets'], static fn(array $a, array $b): int => (int)($b['updatedAt'] ?? 0) <=> (int)($a['updatedAt'] ?? 0));
+        if ($view === 'team') {
+            $result['permissions'] = $staff['permissions'] ?? [];
+            $result['is_admin'] = !empty($staff['admin']);
+            $result['can_manage_users'] = team_has('users_manage');
+            $result['can_manage_announcements'] = team_has('announcements_manage');
+            $result['users'] = array_map(static fn(array $user): array => ['id' => (string)($user['id'] ?? ''), 'username' => (string)($user['username'] ?? ''), 'displayName' => (string)($user['displayName'] ?? $user['username'] ?? ''), 'admin' => !empty($user['admin']), 'permissions' => $user['permissions'] ?? [], 'createdAt' => (int)($user['createdAt'] ?? 0)], array_filter($store['users'], 'is_array'));
+            $result['stats'] = ['users' => count($store['users']), 'tickets' => count($store['tickets']), 'announcements' => count($store['announcements'])];
+            if (team_has('announcements_manage')) $result['announcements'] = array_values(array_filter($store['announcements'], 'is_array'));
+            if (is_array($_SESSION['team_password_notice'] ?? null)) { $result['password_notice'] = $_SESSION['team_password_notice']; unset($_SESSION['team_password_notice']); }
+        }
+    } else {
+        $id = (string)($_GET['id'] ?? '');
+        if (!preg_match('/^[a-f0-9]{16}$/', $id)) json_response(400, ['error' => 'invalid_ticket_id']);
+        $ticket = null;
+        foreach ($store['tickets'] as $entry) if (is_array($entry) && (string)($entry['id'] ?? '') === $id) { $ticket = $entry; break; }
+        $canRead = is_array($ticket) && (($staff && team_has('tickets_view')) || ($discordUser && (string)($ticket['ownerId'] ?? '') === (string)($discordUser['id'] ?? '')));
+        if (!$canRead) json_response(404, ['error' => 'ticket_not_found']);
+        $result['ticket'] = $ticket;
+        $result['can_reply'] = ($staff && team_has('tickets_reply')) || $discordUser !== null;
+        $result['can_claim'] = $staff !== null && ($ticket['status'] ?? '') === 'open';
+        $result['can_close'] = ($staff !== null || ($discordUser && (string)($ticket['ownerId'] ?? '') === (string)($discordUser['id'] ?? ''))) && ($ticket['status'] ?? '') === 'open';
+    }
+    json_response(200, $result);
+}
 if (in_array($route, ['team_login', 'team', 'team_logout', 'team_create_user', 'team_permissions', 'team_reset_password', 'support', 'ticket', 'ticket_create', 'ticket_reply', 'ticket_close', 'ticket_claim', 'ticket_attachment', 'ticket_poll', 'announcement_create', 'announcement_delete'], true)) {
     try {
         team_bootstrap_admin();
@@ -796,7 +773,7 @@ if ($route === 'logout' && $_SERVER['REQUEST_METHOD'] === 'POST') {
   <title>Iron Shield — Sicherheit für deinen Discord</title>
   <link rel="preload" as="image" href="/assets/bot-logo.webp?v=20261001-ticketthreads1" fetchpriority="high" />
   <link rel="icon" type="image/webp" href="/assets/bot-logo.webp?v=20261001-ticketthreads1" />
-  <link rel="stylesheet" href="/assets/styles.php?v=<?php echo rawurlencode((string)(@filemtime(__DIR__ . '/assets/styles.php') ?: time())); ?>" />
+  <link rel="stylesheet" href="/assets/styles.css" />
 </head>
 <body>
   <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
@@ -844,7 +821,6 @@ if ($route === 'logout' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
   <footer class="site-footer section-wrap"><a class="brand footer-brand" href="#start"><span class="brand-mark"><img src="/assets/bot-logo.webp?v=20261001-ticketthreads1" alt="" /></span><span class="brand-name">IRON<span>SHIELD</span></span></a><span class="footer-note">Mit Bedacht entwickelt. Für starke Communities.</span><nav class="footer-legal" aria-label="Rechtliches"><a href="/includes/recht.php?seite=datenschutz">Datenschutz</a><a href="/includes/recht.php?seite=nutzungsbedingungen">Nutzungsbedingungen</a><a href="/includes/recht.php?seite=impressum">Impressum</a></nav><a class="back-top" href="#start">ZURÜCK NACH OBEN <span>↑</span></a></footer>
   <div class="toast" role="status" aria-live="polite"></div>
-  <script src="/assets/script.php?v=20261001-ticketthreads1"></script>
+  <script src="/assets/script.js"></script>
 </body>
 </html>
-
