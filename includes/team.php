@@ -471,13 +471,11 @@ function team_handle_request(string $route): void
         });
         if (!$ticket) json_response(404, ['error' => 'Ticket nicht gefunden oder kein Zugriff.']);
         $messages = is_array($ticket['messages'] ?? null) ? $ticket['messages'] : [];
-        $html = '';
         $newMessages = [];
         foreach (array_slice($messages, $after, null, true) as $message) {
             $newMessages[] = ['authorName' => (string)($message['authorName'] ?? 'Nutzer'), 'team' => !empty($message['team']), 'body' => (string)($message['body'] ?? ''), 'createdAt' => (int)($message['createdAt'] ?? time()), 'attachments' => is_array($message['attachments'] ?? null) ? $message['attachments'] : []];
-            $html .= '<article class="portal-card ticket-message ' . (!empty($message['team']) ? 'from-team' : 'from-user') . '"><strong>' . (!empty($message['team']) ? '<span class="team-message-tag">TEAM</span> ' : '') . team_e((string)($message['authorName'] ?? 'Nutzer')) . '</strong><span class="portal-meta"> · ' . date('d.m.Y H:i', (int)($message['createdAt'] ?? time())) . '</span><p class="portal-message">' . team_e((string)($message['body'] ?? '')) . '</p>' . team_render_attachments(is_array($message['attachments'] ?? null) ? $message['attachments'] : [], $id) . '</article>';
         }
-        json_response(200, ['messages' => $newMessages, 'html' => $html, 'count' => count($messages), 'status' => (string)($ticket['status'] ?? 'closed')]);
+        json_response(200, ['messages' => $newMessages, 'count' => count($messages), 'status' => (string)($ticket['status'] ?? 'closed')]);
     }
     if ($route === 'ticket_attachment') {
         $id = (string)($_GET['id'] ?? ''); $attachmentId = (string)($_GET['file'] ?? '');

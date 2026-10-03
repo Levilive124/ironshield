@@ -1,6 +1,6 @@
 # Vercel-Migration
 
-Die öffentliche Startseite liegt als statisches `index.html` vor; Styles und Startseiten-Script liegen als `.css` und `.js` vor. Vercel leitet vorhandene dynamische Funktionen mit `?route=...` an `api/index.php` weiter und den Rechtstext-Aufruf an `api/recht.php`, damit keine PHP-Datei als Download ausgeliefert wird. Diese dynamischen Ansichten sind noch nicht vollständig auf HTML/JavaScript-Oberflächen umgestellt.
+Alle sichtbaren Seiten liegen als statische HTML-Dateien vor: Startseite, Dashboard, Support, Team-Anmeldung, Teamverwaltung, Tickets und die drei Rechtstexte. Styles und Browserlogik liegen in statischen CSS-/JavaScript-Dateien. Login, Discord-Abfragen, Sitzungen, Ticketänderungen und Bot-Synchronisierung bleiben geschützte PHP-API-Funktionen unter `api/`; PHP erzeugt keine Seitenansichten mehr. Alte Links mit `?route=...` werden zur API weitergeleitet, Links auf die früheren Rechtstext-Routen leiten zu den statischen Dateien um.
 
 ## Vor einem Live-Umzug zwingend erledigen
 
@@ -27,8 +27,10 @@ In Vercel unter **Project → Settings → Environment Variables** serverseitig 
 - `TEAM_ADMIN_USERNAME` und `TEAM_ADMIN_PASSWORD`
 - `DATABASE_URL` — TLS-geschützte PostgreSQL-Verbindungs-URL (z. B. von Neon)
 
+Der Bot-Token und der Bridge-Schlüssel bleiben ausschließlich in serverseitigen Umgebungsvariablen. Sie werden nicht in HTML, JavaScript oder statischen Dateien eingebettet. Für Ticketanhänge begrenzt Vercel die Anfragegröße; auf Vercel lässt das Portal daher derzeit insgesamt bis zu 4 MiB pro Upload-Anfrage zu.
+
 Die Redirect-URL muss exakt dieselbe sein wie unter **Discord Developer Portal → OAuth2 → Redirects**. Der Bot-Host braucht nach dem Domainwechsel `PUBLIC_SITE_URL` mit der neuen HTTPS-Domain und denselben `DASHBOARD_BRIDGE_SECRET`.
 
 ## Deployment
 
-Die Vercel-PHP-Ausführung verwendet `vercel-php@0.9.0` mit Node.js 22. Die ältere Runtime `0.5.2` basiert auf Node.js 14 und wird von Vercel nicht mehr akzeptiert. Die Bereitstellung benötigt ein verbundenes Git-Repository oder eine Vercel-CLI-Anmeldung. Beides ist in diesem Arbeitsordner derzeit nicht eingerichtet. Erst nach dem persistenten Speicherumbau und dem Setzen der Geheimnisse sollte das Projekt als Produktion veröffentlicht werden.
+Die Vercel-PHP-Ausführung verwendet `vercel-php@0.9.0` mit Node.js 22. Die ältere Runtime `0.5.2` basiert auf Node.js 14 und wird von Vercel nicht mehr akzeptiert. Die Bereitstellung benötigt ein verbundenes Git-Repository oder eine Vercel-CLI-Anmeldung. Beides ist in diesem Arbeitsordner derzeit nicht eingerichtet; außerdem muss vor Livebetrieb PostgreSQL bereitgestellt, befüllt und in Vercel konfiguriert werden. Deshalb ist diese lokale Umstellung noch nicht live veröffentlicht.

@@ -176,6 +176,8 @@
   function render(data) {
     current=data;
     document.getElementById('dashboard-user').textContent=data.user.username;
+    const logoutCsrf = document.querySelector('.user-chip form [name="csrf"]');
+    if (logoutCsrf) logoutCsrf.value = data.csrf;
     renderConnection(data);
     const error=data.connection_error || data.relay_error;
     if (error) showMessage(`Synchronisierungsfehler: ${error}`,true);

@@ -11,6 +11,18 @@
       "destination": "/api/recht.php"
     },
     {
+      "source": "/includes/:path*",
+      "destination": "/api/not-found.php"
+    },
+    {
+      "source": "/bot/:path*",
+      "destination": "/api/not-found.php"
+    },
+    {
+      "source": "/scripts/:path*",
+      "destination": "/api/not-found.php"
+    },
+    {
       "source": "/",
       "has": [
         {
