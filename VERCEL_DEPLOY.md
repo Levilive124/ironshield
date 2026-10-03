@@ -1,12 +1,18 @@
 # Vercel-Migration
 
-Die öffentliche Startseite liegt als statisches `index.html` vor; Styles und Startseiten-Script liegen als `.css` und `.js` vor. Für vorhandene dynamische Funktionen (Discord-OAuth, Dashboard und Ticketportal) leitet Vercel Aufrufe mit `?route=...` an `api/index.php` weiter. Diese dynamischen Ansichten und die PHP-API sind noch nicht vollständig auf HTML/JavaScript plus Node-API migriert.
+Die öffentliche Startseite liegt als statisches `index.html` vor; Styles und Startseiten-Script liegen als `.css` und `.js` vor. Vercel leitet vorhandene dynamische Funktionen mit `?route=...` an `api/index.php` weiter und den Rechtstext-Aufruf an `api/recht.php`, damit keine PHP-Datei als Download ausgeliefert wird. Diese dynamischen Ansichten sind noch nicht vollständig auf HTML/JavaScript-Oberflächen umgestellt.
 
 ## Vor einem Live-Umzug zwingend erledigen
 
-Die Website speichert Teamkonten, Tickets, Ankündigungen und Anhänge derzeit unter `.ironshield-private`. Vercel-Funktionen dürfen nicht als dauerhafter Dateispeicher verwendet werden. Vor dem Live-Schalten muss dieser Speicher durch eine dauerhafte Datenbank und privaten Objektspeicher ersetzt und der vorhandene Inhalt migriert werden. Bis dahin darf die Vercel-Version keine produktiven Schreibvorgänge annehmen.
+Für Vercel werden Teamkonten, Tickets, Ankündigungen, Sitzungen, Dashboard-Relay-Zustand und Ticket-Anhänge in PostgreSQL gespeichert. Der Adapter legt seine Tabellen beim ersten Verbindungsaufbau an. Ohne `DATABASE_URL` lehnt die Anwendung dynamische Vercel-Routen mit HTTP 503 ab, statt Daten in flüchtige Dateien zu schreiben. Vor dem Live-Schalten muss der bestehende `.ironshield-private`-Inhalt einmalig in die Datenbank migriert werden. Die PDO-PostgreSQL-Erweiterung der PHP-Runtime wird benötigt.
 
-Außerdem verwendet PHP-Dateisitzungen. Für einen zuverlässigen Login über mehrere kurzlebige Funktionsaufrufe muss die Sitzung in einen gemeinsamen persistenten Sitzungsspeicher umgestellt werden.
+Die private Datensicherung aus dem bisherigen Hosting muss lokal in einen geschützten Ordner heruntergeladen werden. Danach mit installiertem PHP und `DATABASE_URL` als Umgebungsvariable einmalig ausführen:
+
+```sh
+php scripts/import-private-data.php /pfad/zum/.ironshield-private
+```
+
+Das Script importiert Konten, Tickets, Ankündigungen, Dashboard-Zustand und passende Ticket-Anhänge in einer Transaktion. Wiederholte Aufrufe mit unverändertem Datenstand werden erkannt. Es gibt weder private Inhalte noch Zugangsdaten aus und verändert die Quelldateien nicht.
 
 ## Hosting-Werte nach Einrichtung des Speichers
 
@@ -19,7 +25,7 @@ In Vercel unter **Project → Settings → Environment Variables** serverseitig 
 - `DASHBOARD_BRIDGE_SECRET` — derselbe zufällige Schlüssel wie beim Bot, mindestens 32 Zeichen
 - `DASHBOARD_BOT_TOKEN` — nur, falls der Website-Code die Discord-API direkt abfragen muss
 - `TEAM_ADMIN_USERNAME` und `TEAM_ADMIN_PASSWORD`
-- `DATABASE_URL` und die Zugangsdaten des privaten Datei-Speichers, sobald der Speicheradapter eingebaut ist
+- `DATABASE_URL` — TLS-geschützte PostgreSQL-Verbindungs-URL (z. B. von Neon)
 
 Die Redirect-URL muss exakt dieselbe sein wie unter **Discord Developer Portal → OAuth2 → Redirects**. Der Bot-Host braucht nach dem Domainwechsel `PUBLIC_SITE_URL` mit der neuen HTTPS-Domain und denselben `DASHBOARD_BRIDGE_SECRET`.
 
