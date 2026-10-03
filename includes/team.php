@@ -365,23 +365,6 @@ function team_safe_filename(string $filename): string
     return substr($filename !== '' ? $filename : 'Anhang', 0, 180);
 }
 
-function team_render_attachments(array $attachments, string $ticketId): string
-{
-    if (!$attachments) return '';
-    $html = '<div class="ticket-attachments">';
-    foreach ($attachments as $attachment) {
-        $attachmentId = (string)($attachment['id'] ?? '');
-        if (!preg_match('/^[a-f0-9]{40}$/', $attachmentId)) continue;
-        $url = '/?route=ticket_attachment&amp;id=' . rawurlencode($ticketId) . '&amp;file=' . rawurlencode($attachmentId);
-        $name = team_e((string)($attachment['name'] ?? 'Anhang'));
-        $mime = (string)($attachment['mime'] ?? '');
-        if (str_starts_with($mime, 'image/')) $html .= '<a class="ticket-attachment-image" href="' . $url . '" aria-label="' . $name . '"><img src="' . $url . '" alt="' . $name . '" loading="lazy"></a>';
-        elseif (str_starts_with($mime, 'video/')) $html .= '<video class="ticket-attachment-video" controls preload="none"><source src="' . $url . '" type="' . team_e($mime) . '">Dein Browser kann dieses Video nicht abspielen.</video>';
-        $html .= '<a class="ticket-attachment-file" href="' . $url . '" download="' . $name . '">↧ ' . $name . ' <span>' . number_format(((int)($attachment['size'] ?? 0)) / 1048576, 1, ',', '.') . ' MB</span></a>';
-    }
-    return $html . '</div>';
-}
-
 function team_ticket_category(string $category): string
 {
     return match ($category) {
@@ -397,49 +380,9 @@ function team_redirect(string $route, string $message = ''): never
 {
     $staticPages = ['team_login' => '/team-login.html', 'team' => '/team.html', 'support' => '/support.html', 'ticket' => '/ticket.html'];
     $url = $staticPages[$route] ?? ('/?route=' . rawurlencode($route));
-    if ($message !== '') $url .= '&message=' . rawurlencode($message);
+    if ($message !== '') $url .= (str_contains($url, '?') ? '&' : '?') . 'message=' . rawurlencode($message);
     header('Location: ' . $url, true, 303);
     exit;
-}
-
-function team_page_start(string $title, bool $teamArea = false): void
-{
-    $safeTitle = team_e($title);
-    $isTeam = team_user() !== null;
-    echo '<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090c11"><title>' . $safeTitle . ' · Iron Shield</title><link rel="icon" href="/assets/bot-logo.webp?v=20261001-ticketthreads1"><link rel="stylesheet" href="/assets/styles.css"><style>
-    .portal-wrap{width:min(1100px,calc(100% - 40px));margin:0 auto;padding:50px 0 90px}.portal-head{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:15px 0;border-bottom:1px solid var(--line)}.portal-brand{display:flex;align-items:center;gap:12px;color:var(--text);text-decoration:none;font:600 13px var(--display);letter-spacing:.12em}.portal-brand img{width:34px;height:34px;object-fit:contain}.portal-links{display:flex;align-items:center;gap:18px}.portal-links a{color:var(--text);text-decoration:none;font-size:12px}.portal-title{font:500 clamp(36px,6vw,58px)/1.05 var(--display);letter-spacing:-.055em;margin:45px 0 12px}.portal-subtitle,.portal-muted{color:var(--muted);line-height:1.7}.portal-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px;margin:16px 0}.portal-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.portal-label{display:block;color:var(--muted);font-size:11px;margin:13px 0 6px}.portal-input,.portal-select,.portal-textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--text);padding:12px;font:inherit}.portal-textarea{min-height:130px;resize:vertical}.portal-button{border:0;border-radius:999px;padding:12px 18px;background:var(--green);color:#101810;font-weight:700;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:8px}.portal-button.secondary{background:transparent;border:1px solid var(--line);color:var(--text)}.portal-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:17px}.portal-flash{padding:12px 15px;border:1px solid var(--line);border-radius:10px;margin-top:18px;color:var(--green)}.portal-ticket{display:block;color:var(--text);text-decoration:none}.portal-ticket:hover{border-color:var(--green)}.portal-meta{font-size:11px;color:var(--muted)}.portal-message{white-space:pre-wrap;line-height:1.65;margin:8px 0}.portal-perms{display:flex;flex-wrap:wrap;gap:14px;margin:12px 0}.portal-perms label{font-size:12px;color:var(--muted)}.portal-perms input{accent-color:var(--green)}@media(max-width:640px){.portal-wrap{padding-top:22px}.portal-head{align-items:flex-start}.portal-links{gap:10px;flex-wrap:wrap;justify-content:flex-end}.portal-card{padding:16px}}
-    </style></head><body><div class="ambient ambient-one"></div><div class="ambient ambient-two"></div><header class="portal-head" style="width:min(1100px,calc(100% - 40px));margin:auto"><a class="portal-brand" href="/" aria-label="Zur Startseite"><img src="/assets/bot-logo.webp?v=20261001-ticketthreads1" alt="">IRON SHIELD</a><nav class="portal-links"><a href="/?route=support">Ticket-Support</a>';
-    if ($isTeam) echo '<a href="/?route=team">Team</a><form method="post" action="/?route=team_logout" style="margin:0"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><button class="portal-button secondary" type="submit">Abmelden</button></form>';
-    elseif (!empty($_SESSION['user'])) echo '<form method="post" action="/?route=logout" style="margin:0"><button class="portal-button secondary" type="submit">Abmelden</button></form>';
-    else echo '<a href="/?route=login">Discord anmelden</a>';
-    echo '</nav></header><main class="portal-wrap">';
-    if ($teamArea && !$isTeam) echo '<p class="portal-muted">Teamzugriff</p>';
-    if (isset($_GET['message'])) echo '<div class="portal-flash">' . team_e((string)$_GET['message']) . '</div>';
-}
-
-function team_page_end(): void { echo '</main></body></html>'; }
-
-function team_render_public_announcements(): string
-{
-    try {
-        $announcements = team_store(static function (array &$data): array {
-            $now = time();
-            $items = array_values(array_filter($data['announcements'] ?? [], static fn($item) => is_array($item) && (empty($item['expiresAt']) || (int)$item['expiresAt'] > $now)));
-            usort($items, static fn(array $a, array $b): int => (int)($b['createdAt'] ?? 0) <=> (int)($a['createdAt'] ?? 0));
-            return array_slice($items, 0, 4);
-        });
-        if (!$announcements) return '';
-        $html = '<section class="public-announcements section-wrap"><div class="announcement-heading"><span class="portal-kicker">IRON SHIELD · NEUIGKEITEN</span><h2>Aktuelles<span>.</span></h2></div><div class="announcement-grid">';
-        foreach ($announcements as $item) {
-            $html .= '<article class="announcement-card"><span class="announcement-meta">' . team_e((string)($item['createdBy'] ?? 'Iron Shield Team')) . ' · ' . date('d.m.Y H:i', (int)($item['createdAt'] ?? time())) . '</span><h3>' . team_e((string)($item['title'] ?? 'Mitteilung')) . '</h3><p>' . nl2br(team_e((string)($item['body'] ?? ''))) . '</p>';
-            if (!empty($item['expiresAt'])) $html .= '<span class="announcement-expiry">Angezeigt bis ' . (new DateTimeImmutable('@' . (int)$item['expiresAt']))->setTimezone(new DateTimeZone('Europe/Berlin'))->format('d.m.Y H:i') . '</span>';
-            $html .= '</article>';
-        }
-        return $html . '</div></section>';
-    } catch (Throwable $error) {
-        error_log('Iron Shield public announcements: ' . $error->getMessage());
-        return '';
-    }
 }
 
 function team_handle_request(string $route): void

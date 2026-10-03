@@ -31,6 +31,8 @@ Der Bot-Token und der Bridge-Schlüssel bleiben ausschließlich in serverseitige
 
 Die Redirect-URL muss exakt dieselbe sein wie unter **Discord Developer Portal → OAuth2 → Redirects**. Der Bot-Host braucht nach dem Domainwechsel `PUBLIC_SITE_URL` mit der neuen HTTPS-Domain und denselben `DASHBOARD_BRIDGE_SECRET`.
 
+Die Website-Einladelinks fordern keine Berechtigung zum Erstellen von Kanälen oder Senden von Nachrichten an. Das Dashboard listet vorhandene Kanäle nur zum Auswählen. Im Bot-Verzeichnis gibt es in dieser Version keinen Kanal-Erstellungs- oder Nachrichten-Sendeaufruf; die vorhandene Startbereinigung löscht ausschließlich alte Relay-Kanäle mit dem eindeutigen IronShield-Marker.
+
 ## Deployment
 
 Die Vercel-PHP-Ausführung verwendet `vercel-php@0.9.0` mit Node.js 22. Die ältere Runtime `0.5.2` basiert auf Node.js 14 und wird von Vercel nicht mehr akzeptiert. Die Bereitstellung benötigt ein verbundenes Git-Repository oder eine Vercel-CLI-Anmeldung. Beides ist in diesem Arbeitsordner derzeit nicht eingerichtet; außerdem muss vor Livebetrieb PostgreSQL bereitgestellt, befüllt und in Vercel konfiguriert werden. Deshalb ist diese lokale Umstellung noch nicht live veröffentlicht.

@@ -94,8 +94,7 @@ function failure_page(string $message, int $status = 500): never
     http_response_code($status);
     header('Content-Type: text/html; charset=utf-8');
     header('Cache-Control: no-store');
-    $message = htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-    echo '<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Iron Shield</title><body style="margin:0;background:#090c11;color:#edf2ef;font:16px system-ui;display:grid;min-height:100vh;place-items:center"><main style="max-width:520px;padding:32px"><p style="color:#a5e58b">IRON SHIELD</p><h1>Das hat leider nicht geklappt.</h1><p>' . $message . '</p><p><a style="color:#a5e58b" href="/?route=login">Login erneut starten</a></p><a style="color:#a5e58b" href="/">Zurück zur Startseite</a></main></body></html>';
+    readfile(__DIR__ . '/error.html');
     exit;
 }
 
