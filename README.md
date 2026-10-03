@@ -1,6 +1,6 @@
-# Iron Shield Website (PHP)
+# Iron Shield Website (HTML-Frontend und API)
 
-Die Website verwendet PHP für Discord-OAuth, Sitzungen und das Support-Portal. Die öffentliche Startdatei ist `index.php`; Bild, Styles und Browser-Script liegen in `assets/`, die Rechtstexte in `includes/`.
+Alle sichtbaren Seiten sind statische HTML-Dateien; CSS und Browserlogik liegen in `assets/`. PHP bleibt als serverseitige API für Discord-OAuth, Sitzungen, sichere Datenänderungen und Bot-Synchronisierung. Dadurch werden weder Discord-Tokens noch Bridge-Schlüssel an den Browser ausgeliefert. Für Vercel, PostgreSQL und die einmalige Datenübernahme siehe `VERCEL_DEPLOY.md`.
 
 ## Lokal starten
 
@@ -10,7 +10,7 @@ Die Website verwendet PHP für Discord-OAuth, Sitzungen und das Support-Portal. 
 4. Öffne im Discord Developer Portal deiner Anwendung **OAuth2 → Redirects** und registriere exakt `http://localhost:8000/?route=callback`.
 5. Starte im Projektordner `sh start.sh` und öffne <http://localhost:8000>. Beim ersten Start richtet das Script die Python-Abhängigkeit in `.runtime/` ein und startet danach PHP und Bot gemeinsam.
 
-Der Discord-Login nutzt die OAuth2-Scopes `identify` und `guilds`. Das Server-Dashboard ist unter `/?route=dashboard` erreichbar. Es zeigt die Server des angemeldeten Discord-Kontos und den vom verbundenen Bot gemeldeten Anwesenheitsstatus. Serveradmins erhalten je nach Status einen Button zum Einladen oder zur Ticketverwaltung. Falls der Dashboard-Bot eine andere Discord-Anwendung ist als der Login, setze `DISCORD_BOT_CLIENT_ID` auf die Client-ID dieser Bot-Anwendung.
+Der Discord-Login nutzt die OAuth2-Scopes `identify` und `guilds`. Das Server-Dashboard liegt unter `/dashboard.html`; Support, Team-Login und Tickets haben ebenfalls statische HTML-Seiten. Die API prüft Sitzung und Berechtigungen für jede geschützte Aktion. Serveradmins erhalten je nach Status einen Button zum Einladen oder zur Ticketverwaltung. Falls der Dashboard-Bot eine andere Discord-Anwendung ist als der Login, setze `DISCORD_BOT_CLIENT_ID` auf die Client-ID dieser Bot-Anwendung.
 
 ### Server-Dashboard und Bot-Verbindung
 

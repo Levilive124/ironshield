@@ -6,6 +6,23 @@ if (PHP_SAPI !== 'cli') {
     exit;
 }
 
+// Allow a local, ignored .env for a one-time migration without exposing its
+// database URL in shell history. Existing process environment always wins.
+if (getenv('DATABASE_URL') === false) {
+    $localEnv = dirname(__DIR__) . DIRECTORY_SEPARATOR . '.env';
+    if (is_file($localEnv)) {
+        foreach (file($localEnv, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#') || !str_contains($line, '=')) continue;
+            [$key, $value] = explode('=', $line, 2);
+            if (trim($key) !== 'DATABASE_URL') continue;
+            $value = trim(trim($value), "\"'");
+            if ($value !== '') putenv('DATABASE_URL=' . $value);
+            break;
+        }
+    }
+}
+
 require_once dirname(__DIR__) . '/includes/storage.php';
 
 $source = isset($argv[1]) ? rtrim((string)$argv[1], DIRECTORY_SEPARATOR . '/\\') : dirname(__DIR__) . DIRECTORY_SEPARATOR . '.ironshield-private';

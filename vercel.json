@@ -21,6 +21,10 @@
   ],
   "rewrites": [
     {
+      "source": "/index.php",
+      "destination": "/api/index.php"
+    },
+    {
       "source": "/includes/recht.php",
       "destination": "/api/recht.php"
     },

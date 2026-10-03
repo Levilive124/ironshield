@@ -9,7 +9,7 @@
   // Preserve Discord snowflakes exactly: JSON.parse normally rounds these in JS.
   const raw = dataNode.textContent.replace(/(?<![\w"])(\d{15,22})(?![\w"])/g, '"$1"');
   let settings;
-  try { settings = JSON.parse(raw); } catch { root.innerHTML = '<p class="dashboard-message">Die Ticket-Einstellungen konnten nicht gelesen werden.</p>'; return; }
+  try { settings = JSON.parse(raw); } catch { const error = document.createElement('p'); error.className = 'dashboard-message'; error.textContent = 'Die Ticket-Einstellungen konnten nicht gelesen werden.'; root.replaceChildren(error); return; }
   settings.guild ||= {};
   settings.panels ||= {};
   const originalPanelIds = Object.keys(settings.panels);
@@ -23,7 +23,7 @@
       if (key === 'class') node.className = value;
       else if (key === 'text') node.textContent = value;
       else if (key.startsWith('data-')) node.setAttribute(key, value);
-      else if (key === 'html') node.innerHTML = value;
+      else if (key === 'html') node.textContent = value;
       else if (value !== undefined && value !== null) node.setAttribute(key, value);
     }
     for (const child of children) if (child) node.append(child);

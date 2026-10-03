@@ -6,10 +6,10 @@ Alle sichtbaren Seiten liegen als statische HTML-Dateien vor: Startseite, Dashbo
 
 Für Vercel werden Teamkonten, Tickets, Ankündigungen, Sitzungen, Dashboard-Relay-Zustand und Ticket-Anhänge in PostgreSQL gespeichert. Der Adapter legt seine Tabellen beim ersten Verbindungsaufbau an. Ohne `DATABASE_URL` lehnt die Anwendung dynamische Vercel-Routen mit HTTP 503 ab, statt Daten in flüchtige Dateien zu schreiben. Vor dem Live-Schalten muss der bestehende `.ironshield-private`-Inhalt einmalig in die Datenbank migriert werden. Die PDO-PostgreSQL-Erweiterung der PHP-Runtime wird benötigt.
 
-Die private Datensicherung aus dem bisherigen Hosting muss lokal in einen geschützten Ordner heruntergeladen werden. Danach mit installiertem PHP und `DATABASE_URL` als Umgebungsvariable einmalig ausführen:
+Die private Datensicherung aus dem bisherigen Hosting muss lokal in `.ironshield-private/` liegen. Eine `DATABASE_URL` kann für den Einmalimport in die ignorierte lokale `.env` geschrieben werden; der Import liest nur diesen Schlüssel und gibt den Wert nicht aus. Danach mit installiertem PHP einmalig im Projektordner ausführen:
 
 ```sh
-php scripts/import-private-data.php /pfad/zum/.ironshield-private
+php scripts/import-private-data.php
 ```
 
 Das Script importiert Konten, Tickets, Ankündigungen, Dashboard-Zustand und passende Ticket-Anhänge in einer Transaktion. Wiederholte Aufrufe mit unverändertem Datenstand werden erkannt. Es gibt weder private Inhalte noch Zugangsdaten aus und verändert die Quelldateien nicht.
