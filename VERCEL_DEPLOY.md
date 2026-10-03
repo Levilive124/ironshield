@@ -25,4 +25,4 @@ Die Redirect-URL muss exakt dieselbe sein wie unter **Discord Developer Portal �
 
 ## Deployment
 
-Die Vercel-PHP-Ausführung verwendet den Community-Runtime-Eintrag `vercel-php@0.5.2`. Die Bereitstellung benötigt ein verbundenes Git-Repository oder eine Vercel-CLI-Anmeldung. Beides ist in diesem Arbeitsordner derzeit nicht eingerichtet. Erst nach dem persistenten Speicherumbau und dem Setzen der Geheimnisse sollte das Projekt als Produktion veröffentlicht werden.
+Die Vercel-PHP-Ausführung verwendet `vercel-php@0.9.0` mit Node.js 22. Die ältere Runtime `0.5.2` basiert auf Node.js 14 und wird von Vercel nicht mehr akzeptiert. Die Bereitstellung benötigt ein verbundenes Git-Repository oder eine Vercel-CLI-Anmeldung. Beides ist in diesem Arbeitsordner derzeit nicht eingerichtet. Erst nach dem persistenten Speicherumbau und dem Setzen der Geheimnisse sollte das Projekt als Produktion veröffentlicht werden.
