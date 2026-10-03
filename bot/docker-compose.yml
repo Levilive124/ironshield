@@ -1,0 +1,36 @@
+services:
+  ticket-bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      BOT_HTTP_HOST: 0.0.0.0
+      BOT_HTTP_PORT: "8765"
+      BOT_TRUSTED_TLS_PROXY: "1"
+    expose:
+      - "8765"
+    networks:
+      - bot-network
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      BOT_DOMAIN: ${BOT_DOMAIN:?Set BOT_DOMAIN in bot/.env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+
+volumes:
+  caddy-data:
+  caddy-config:

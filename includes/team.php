@@ -1,0 +1,691 @@
+<?php
+declare(strict_types=1);
+
+function team_data_dir(): string
+{
+    $projectData = dirname(__DIR__) . DIRECTORY_SEPARATOR . '.ironshield-private';
+    $stableHome = is_dir('/home/container') ? '/home/container/.ironshield-private' : $projectData;
+    $configured = trim(config('TEAM_DATA_DIR'));
+    if ($configured !== '') {
+        $temporaryRoot = rtrim(sys_get_temp_dir(), '/\\');
+        $normalized = rtrim($configured, '/\\');
+        if ($normalized === $temporaryRoot || str_starts_with($normalized, $temporaryRoot . DIRECTORY_SEPARATOR)) {
+            error_log('TEAM_DATA_DIR points to temporary storage; using the persistent server data directory instead.');
+            return $stableHome;
+        }
+        return $normalized;
+    }
+    return $stableHome;
+}
+
+function team_migrate_legacy_store(string $directory): void
+{
+    $migrationMarker = $directory . DIRECTORY_SEPARATOR . '.legacy-migration-v1';
+    $destination = $directory . DIRECTORY_SEPARATOR . 'store.json';
+    $migrationLock = @fopen($directory . DIRECTORY_SEPARATOR . 'store-migration.lock', 'c+');
+    if ($migrationLock === false || !flock($migrationLock, LOCK_EX)) {
+        if (is_resource($migrationLock)) fclose($migrationLock);
+        throw new RuntimeException('Die Kontodaten werden gerade wiederhergestellt. Bitte versuche es gleich erneut.');
+    }
+    try {
+        $markerExists = is_file($migrationMarker);
+        $destinationExists = is_file($destination);
+        $currentContents = $destinationExists ? @file_get_contents($destination) : false;
+        $decodedCurrent = is_string($currentContents) ? json_decode($currentContents, true) : null;
+        $destinationValid = is_array($decodedCurrent);
+
+        // After a redeploy the configured primary directory may be empty while
+        // the durable mirror still has the account database. A migration marker
+        // must not prevent recovery from that mirror.
+        $hasSavedAccounts = $destinationValid && is_array($decodedCurrent['users'] ?? null) && count($decodedCurrent['users']) > 0;
+        if ($markerExists && $destinationValid && $hasSavedAccounts) return;
+        if ($destinationExists && !$destinationValid) {
+            $corruptCopy = $destination . '.corrupt-' . gmdate('Ymd-His');
+            if (!@copy($destination, $corruptCopy)) throw new RuntimeException('Die beschädigte Kontodatei konnte nicht vor der Wiederherstellung gesichert werden.');
+            @chmod($corruptCopy, 0600);
+        }
+
+    $currentData = ['users' => [], 'tickets' => [], 'announcements' => []];
+    if ($destinationValid) {
+        $currentData = array_replace($currentData, $decodedCurrent);
+    }
+    $projectBackup = dirname(__DIR__) . DIRECTORY_SEPARATOR . '.ironshield-private';
+    $serverBackup = is_dir('/home/container') ? '/home/container/.ironshield-private' : $projectBackup;
+    $sources = [$projectBackup, $serverBackup];
+    $legacyDirectory = rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR . 'ironshield-team-' . substr(hash('sha256', __DIR__), 0, 16);
+    $sources[] = $legacyDirectory;
+    $sourceStoreFound = false;
+    foreach (array_unique($sources) as $sourceDirectory) {
+        $sourceStore = $sourceDirectory . DIRECTORY_SEPARATOR . 'store.json';
+        if (!is_file($sourceStore) || realpath($sourceDirectory) === realpath($directory)) continue;
+        $sourceLock = @fopen($sourceDirectory . DIRECTORY_SEPARATOR . 'store.lock', 'c+');
+        if ($sourceLock === false || !flock($sourceLock, LOCK_SH)) {
+            if (is_resource($sourceLock)) fclose($sourceLock);
+            throw new RuntimeException('Der bisherige Team-Datenspeicher konnte nicht sicher übernommen werden.');
+        }
+        try {
+            $contents = @file_get_contents($sourceStore);
+            $decoded = is_string($contents) ? json_decode($contents, true) : null;
+            if (!is_string($contents) || !is_array($decoded)) throw new RuntimeException('Der bisherige Team-Datenspeicher ist nicht lesbar.');
+            $sourceStoreFound = true;
+            $sourceAttachments = $sourceDirectory . DIRECTORY_SEPARATOR . 'attachments';
+            if (is_dir($sourceAttachments)) {
+                $destinationAttachments = $directory . DIRECTORY_SEPARATOR . 'attachments';
+                if (!is_dir($destinationAttachments) && !@mkdir($destinationAttachments, 0700, true) && !is_dir($destinationAttachments)) throw new RuntimeException('Ticket-Anhänge konnten nicht in den dauerhaften Speicher übernommen werden.');
+                foreach (new DirectoryIterator($sourceAttachments) as $file) {
+                    if ($file->isDot() || !$file->isFile() || $file->isLink()) continue;
+                    $target = $destinationAttachments . DIRECTORY_SEPARATOR . $file->getFilename();
+                    if (!is_file($target) && !@copy($file->getPathname(), $target)) throw new RuntimeException('Ein Ticket-Anhang konnte nicht übernommen werden.');
+                    @chmod($target, 0600);
+                }
+            }
+
+            $changed = !$destinationValid;
+            $collectionsToImport = ($markerExists && $destinationValid)
+                ? ['users']
+                : ['users', 'tickets', 'announcements'];
+            foreach ($collectionsToImport as $collection) {
+                if (!is_array($decoded[$collection] ?? null)) continue;
+                $currentData[$collection] = is_array($currentData[$collection] ?? null) ? $currentData[$collection] : [];
+                foreach ($decoded[$collection] as $sourceRecord) {
+                    if (!is_array($sourceRecord)) continue;
+                    $duplicate = false;
+                    foreach ($currentData[$collection] as $currentRecord) {
+                        if (!is_array($currentRecord)) continue;
+                        if ($collection === 'users') {
+                            $sameId = (string)($currentRecord['id'] ?? '') !== '' && (string)($currentRecord['id'] ?? '') === (string)($sourceRecord['id'] ?? '');
+                            $sameUsername = (string)($currentRecord['username'] ?? '') !== '' && strcasecmp((string)$currentRecord['username'], (string)($sourceRecord['username'] ?? '')) === 0;
+                            if ($sameId || $sameUsername) { $duplicate = true; break; }
+                        } elseif ((string)($currentRecord['id'] ?? '') !== '' && (string)($currentRecord['id'] ?? '') === (string)($sourceRecord['id'] ?? '')) {
+                            $duplicate = true; break;
+                        }
+                    }
+                    if (!$duplicate) { $currentData[$collection][] = $sourceRecord; $changed = true; }
+                }
+            }
+            foreach ($decoded as $key => $value) if (!in_array($key, ['users', 'tickets', 'announcements'], true) && !array_key_exists($key, $currentData)) { $currentData[$key] = $value; $changed = true; }
+            if ($changed) {
+                $merged = json_encode($currentData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
+                $temporary = $destination . '.' . bin2hex(random_bytes(5)) . '.migration';
+                if (@file_put_contents($temporary, $merged, LOCK_EX) === false || !@rename($temporary, $destination)) {
+                    @unlink($temporary);
+                    throw new RuntimeException('Der bisherige Team-Datenspeicher konnte nicht übernommen werden.');
+                }
+                @chmod($destination, 0600);
+                $destinationExists = true;
+            }
+        } finally {
+            flock($sourceLock, LOCK_UN);
+            fclose($sourceLock);
+        }
+    }
+    if ($sourceStoreFound && !$markerExists) {
+        if (@file_put_contents($migrationMarker, 'completed ' . gmdate(DATE_ATOM) . "\n", LOCK_EX) === false) {
+            throw new RuntimeException('Die Datenmigration konnte nicht als abgeschlossen markiert werden.');
+        }
+        @chmod($migrationMarker, 0600);
+    } elseif (!$sourceStoreFound && $markerExists && !$destinationValid) {
+        throw new RuntimeException('Der aktive Kontospeicher fehlt oder ist beschädigt und es wurde keine lesbare Sicherung gefunden.');
+    }
+    } finally {
+        flock($migrationLock, LOCK_UN);
+        fclose($migrationLock);
+    }
+}
+
+function team_sync_persistent_backup(string $primaryDirectory): void
+{
+    $backupDirectory = is_dir('/home/container') ? '/home/container/.ironshield-private' : dirname(__DIR__) . DIRECTORY_SEPARATOR . '.ironshield-private';
+    $primaryReal = realpath($primaryDirectory);
+    $backupReal = realpath($backupDirectory);
+    if (($primaryReal !== false && $backupReal !== false && $primaryReal === $backupReal) || rtrim($primaryDirectory, '/\\') === rtrim($backupDirectory, '/\\')) return;
+    if (!is_dir($backupDirectory) && !@mkdir($backupDirectory, 0700, true) && !is_dir($backupDirectory)) throw new RuntimeException('Die zusätzliche dauerhafte Datensicherung konnte nicht angelegt werden.');
+    @chmod($backupDirectory, 0700);
+    $documentRoot = realpath(dirname(__DIR__));
+    $backupReal = realpath($backupDirectory);
+    if ($documentRoot !== false && $backupReal !== false && str_starts_with($backupReal, $documentRoot . DIRECTORY_SEPARATOR)) {
+        if (!is_file($backupDirectory . DIRECTORY_SEPARATOR . '.htaccess')) @file_put_contents($backupDirectory . DIRECTORY_SEPARATOR . '.htaccess', "Require all denied\nDeny from all\n");
+        if (!is_file($backupDirectory . DIRECTORY_SEPARATOR . 'web.config')) @file_put_contents($backupDirectory . DIRECTORY_SEPARATOR . 'web.config', '<?xml version="1.0" encoding="UTF-8"?><configuration><system.webServer><security><authorization><remove users="*" roles="" verbs=""/><add accessType="Deny" users="*"/></authorization></security></system.webServer></configuration>');
+    }
+    $lock = @fopen($backupDirectory . DIRECTORY_SEPARATOR . 'store.lock', 'c+');
+    if ($lock === false || !flock($lock, LOCK_EX)) { if (is_resource($lock)) fclose($lock); throw new RuntimeException('Die zusätzliche Datensicherung ist gesperrt.'); }
+    try {
+        $primaryAttachments = $primaryDirectory . DIRECTORY_SEPARATOR . 'attachments';
+        if (is_dir($primaryAttachments)) {
+            $backupAttachments = $backupDirectory . DIRECTORY_SEPARATOR . 'attachments';
+            if (!is_dir($backupAttachments) && !@mkdir($backupAttachments, 0700, true) && !is_dir($backupAttachments)) throw new RuntimeException('Ticket-Anhänge konnten nicht zusätzlich gesichert werden.');
+            foreach (new DirectoryIterator($primaryAttachments) as $file) {
+                if ($file->isDot() || !$file->isFile() || $file->isLink()) continue;
+                $target = $backupAttachments . DIRECTORY_SEPARATOR . $file->getFilename();
+                if (!is_file($target) && !@copy($file->getPathname(), $target)) throw new RuntimeException('Ein Ticket-Anhang konnte nicht zusätzlich gesichert werden.');
+                @chmod($target, 0600);
+            }
+        }
+        $contents = @file_get_contents($primaryDirectory . DIRECTORY_SEPARATOR . 'store.json');
+        if (!is_string($contents) || !is_array(json_decode($contents, true))) throw new RuntimeException('Die Hauptdatei für Teamdaten konnte nicht zusätzlich gesichert werden.');
+        $temporary = $backupDirectory . DIRECTORY_SEPARATOR . 'store.json.' . bin2hex(random_bytes(5)) . '.tmp';
+        if (@file_put_contents($temporary, $contents, LOCK_EX) === false || !@rename($temporary, $backupDirectory . DIRECTORY_SEPARATOR . 'store.json')) {
+            @unlink($temporary);
+            throw new RuntimeException('Die zusätzliche Datensicherung konnte nicht abgeschlossen werden.');
+        }
+        @chmod($backupDirectory . DIRECTORY_SEPARATOR . 'store.json', 0600);
+        $migrationMarker = $primaryDirectory . DIRECTORY_SEPARATOR . '.legacy-migration-v1';
+        if (is_file($migrationMarker)) {
+            $backupMarker = $backupDirectory . DIRECTORY_SEPARATOR . '.legacy-migration-v1';
+            if (!is_file($backupMarker) && @copy($migrationMarker, $backupMarker)) @chmod($backupMarker, 0600);
+        }
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
+}
+
+function team_store(callable $callback, bool $write = false): mixed
+{
+    $directory = team_data_dir();
+    if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) {
+        throw new RuntimeException('Der private Team-Datenspeicher konnte nicht angelegt werden.');
+    }
+    @chmod($directory, 0700);
+    team_migrate_legacy_store($directory);
+    $documentRoot = realpath(dirname(__DIR__));
+    $realDirectory = realpath($directory);
+    if ($documentRoot !== false && $realDirectory !== false && str_starts_with($realDirectory, $documentRoot . DIRECTORY_SEPARATOR)) {
+        $denyFile = $directory . DIRECTORY_SEPARATOR . '.htaccess';
+        if (!is_file($denyFile)) @file_put_contents($denyFile, "Require all denied\nDeny from all\n");
+        $webConfig = $directory . DIRECTORY_SEPARATOR . 'web.config';
+        if (!is_file($webConfig)) @file_put_contents($webConfig, '<?xml version="1.0" encoding="UTF-8"?><configuration><system.webServer><security><authorization><remove users="*" roles="" verbs=""/><add accessType="Deny" users="*"/></authorization></security></system.webServer></configuration>');
+    }
+    $lock = fopen($directory . '/store.lock', 'c+');
+    if ($lock === false || !flock($lock, $write ? LOCK_EX : LOCK_SH)) throw new RuntimeException('Der Team-Datenspeicher ist gerade nicht verfügbar.');
+    try {
+        $path = $directory . '/store.json';
+        $data = ['users' => [], 'tickets' => [], 'announcements' => []];
+        if (is_file($path)) {
+            $decoded = json_decode((string)file_get_contents($path), true);
+            if (!is_array($decoded)) throw new RuntimeException('Der Team-Datenspeicher ist beschädigt.');
+            $data = array_replace($data, $decoded);
+        }
+        $result = $callback($data);
+        if ($write) {
+            $temporary = $path . '.' . bin2hex(random_bytes(5)) . '.tmp';
+            $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
+            if (file_put_contents($temporary, $json, LOCK_EX) === false || !@rename($temporary, $path)) {
+                @unlink($temporary);
+                throw new RuntimeException('Änderungen konnten nicht gespeichert werden.');
+            }
+            @chmod($path, 0600);
+            team_sync_persistent_backup($directory);
+        }
+        return $result;
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
+}
+
+function team_permissions(bool $admin = false): array
+{
+    return ['tickets_view' => true, 'tickets_reply' => true, 'users_manage' => $admin, 'announcements_manage' => false];
+}
+
+function team_bootstrap_admin(): void
+{
+    team_store(static function (array &$data): void {
+        foreach ($data['users'] as &$existingUser) if (is_array($existingUser)) unset($existingUser['mustChangePassword']);
+        unset($existingUser);
+        $username = trim(config('TEAM_ADMIN_USERNAME'));
+        $password = config('TEAM_ADMIN_PASSWORD');
+        if ($username === '' || strlen($password) < 10) return;
+        if ($data['users']) {
+            foreach ($data['users'] as $entry) if (strcasecmp((string)($entry['username'] ?? ''), $username) === 0 && !empty($entry['admin'])) return;
+            foreach ($data['users'] as &$entry) if (!empty($entry['admin'])) {
+                $entry['username'] = $username;
+                $entry['passwordHash'] = password_hash($password, PASSWORD_DEFAULT);
+                $entry['permissions'] = team_permissions(true);
+                unset($entry);
+                return;
+            }
+            unset($entry);
+            return;
+        }
+        $data['users'][] = ['id' => bin2hex(random_bytes(12)), 'displayName' => $username, 'username' => $username, 'passwordHash' => password_hash($password, PASSWORD_DEFAULT), 'permissions' => team_permissions(true), 'admin' => true, 'createdAt' => time()];
+    }, true);
+}
+
+function team_user(): ?array
+{
+    return is_array($_SESSION['team_user'] ?? null) ? $_SESSION['team_user'] : null;
+}
+
+function team_has(string $permission): bool
+{
+    if (in_array($permission, ['tickets_view', 'tickets_reply'], true)) return team_user() !== null;
+    if ($permission === 'announcements_manage' && !empty(team_user()['admin'])) return true;
+    return (bool)(team_user()['permissions'][$permission] ?? false);
+}
+
+function team_csrf(): string
+{
+    if (empty($_SESSION['team_csrf'])) $_SESSION['team_csrf'] = bin2hex(random_bytes(24));
+    return (string)$_SESSION['team_csrf'];
+}
+
+function team_verify_csrf(): void
+{
+    $given = (string)($_POST['csrf'] ?? '');
+    if ($given === '' || !hash_equals(team_csrf(), $given)) throw new RuntimeException('Sitzung abgelaufen. Bitte lade die Seite neu und versuche es erneut.');
+}
+
+function team_e(string $value): string
+{
+    return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
+function team_length(string $value): int
+{
+    $count = preg_match_all('/./us', $value);
+    return $count === false ? strlen($value) : $count;
+}
+
+function team_save_attachments(): array
+{
+    $files = $_FILES['attachments'] ?? null;
+    if (!is_array($files) || !isset($files['name']) || !is_array($files['name'])) return [];
+    $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp', 'video/mp4' => 'mp4', 'video/webm' => 'webm', 'video/quicktime' => 'mov'];
+    $pending = [];
+    foreach ($files['name'] as $index => $originalName) {
+        $error = (int)($files['error'][$index] ?? UPLOAD_ERR_NO_FILE);
+        if ($error === UPLOAD_ERR_NO_FILE) continue;
+        if ($error !== UPLOAD_ERR_OK) throw new RuntimeException($error === UPLOAD_ERR_INI_SIZE || $error === UPLOAD_ERR_FORM_SIZE ? 'Eine Datei ist zu groß. Pro Datei sind maximal 5 MB erlaubt.' : 'Mindestens eine Datei konnte nicht hochgeladen werden.');
+        $size = (int)($files['size'][$index] ?? 0);
+        $temporaryPath = (string)($files['tmp_name'][$index] ?? '');
+        if ($size < 1 || $size > 5 * 1024 * 1024 || !is_uploaded_file($temporaryPath)) throw new RuntimeException('Dateien müssen echte Uploads mit maximal 5 MB sein.');
+        $pending[] = [$index, (string)$originalName, $temporaryPath, $size];
+    }
+    if (count($pending) > 3) throw new RuntimeException('Du kannst höchstens 3 Medien pro Nachricht anhängen.');
+    if (!$pending) return [];
+    $directory = team_data_dir() . DIRECTORY_SEPARATOR . 'attachments';
+    if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) throw new RuntimeException('Der private Medienordner konnte nicht angelegt werden.');
+    @chmod($directory, 0700);
+    $saved = [];
+    try {
+        foreach ($pending as [$index, $originalName, $temporaryPath, $size]) {
+            $mime = team_detect_mime($temporaryPath);
+            if (!isset($allowed[$mime])) throw new RuntimeException('Erlaubt sind Bilder (JPG, PNG, GIF, WebP) und Videos (MP4, WebM, MOV).');
+            $id = bin2hex(random_bytes(20));
+            $storedPath = $directory . DIRECTORY_SEPARATOR . $id . '.' . $allowed[$mime];
+            if (!move_uploaded_file($temporaryPath, $storedPath)) throw new RuntimeException('Eine Datei konnte nicht sicher gespeichert werden.');
+            @chmod($storedPath, 0600);
+            $saved[] = ['id' => $id, 'name' => team_safe_filename($originalName), 'mime' => $mime, 'size' => $size];
+        }
+    } catch (Throwable $error) {
+        foreach ($saved as $attachment) @unlink($directory . DIRECTORY_SEPARATOR . $attachment['id'] . '.' . $allowed[$attachment['mime']]);
+        throw $error;
+    }
+    return $saved;
+}
+
+function team_detect_mime(string $path): string
+{
+    if (class_exists('finfo')) {
+        $finfo = new finfo(FILEINFO_MIME_TYPE);
+        return (string)($finfo->file($path) ?: '');
+    }
+    $image = @getimagesize($path);
+    if (is_array($image) && isset($image['mime'])) return (string)$image['mime'];
+    $handle = @fopen($path, 'rb');
+    $header = $handle === false ? '' : (string)fread($handle, 16);
+    if (is_resource($handle)) fclose($handle);
+    if (str_starts_with($header, "\x1A\x45\xDF\xA3")) return 'video/webm';
+    if (substr($header, 4, 4) === 'ftyp') return substr($header, 8, 4) === 'qt  ' ? 'video/quicktime' : 'video/mp4';
+    return '';
+}
+
+function team_safe_filename(string $filename): string
+{
+    $filename = basename(str_replace('\\', '/', $filename));
+    $filename = preg_replace('/[\x00-\x1F\x7F]/u', '', $filename) ?? 'Anhang';
+    return substr($filename !== '' ? $filename : 'Anhang', 0, 180);
+}
+
+function team_render_attachments(array $attachments, string $ticketId): string
+{
+    if (!$attachments) return '';
+    $html = '<div class="ticket-attachments">';
+    foreach ($attachments as $attachment) {
+        $attachmentId = (string)($attachment['id'] ?? '');
+        if (!preg_match('/^[a-f0-9]{40}$/', $attachmentId)) continue;
+        $url = '/?route=ticket_attachment&amp;id=' . rawurlencode($ticketId) . '&amp;file=' . rawurlencode($attachmentId);
+        $name = team_e((string)($attachment['name'] ?? 'Anhang'));
+        $mime = (string)($attachment['mime'] ?? '');
+        if (str_starts_with($mime, 'image/')) $html .= '<a class="ticket-attachment-image" href="' . $url . '" aria-label="' . $name . '"><img src="' . $url . '" alt="' . $name . '" loading="lazy"></a>';
+        elseif (str_starts_with($mime, 'video/')) $html .= '<video class="ticket-attachment-video" controls preload="none"><source src="' . $url . '" type="' . team_e($mime) . '">Dein Browser kann dieses Video nicht abspielen.</video>';
+        $html .= '<a class="ticket-attachment-file" href="' . $url . '" download="' . $name . '">↧ ' . $name . ' <span>' . number_format(((int)($attachment['size'] ?? 0)) / 1048576, 1, ',', '.') . ' MB</span></a>';
+    }
+    return $html . '</div>';
+}
+
+function team_ticket_category(string $category): string
+{
+    return match ($category) {
+        'security' => 'Sicherheit / Schutz',
+        'technical' => 'Technischer Support',
+        'bug' => 'Fehler melden',
+        'other' => 'Sonstiges',
+        default => 'Allgemeine Frage',
+    };
+}
+
+function team_redirect(string $route, string $message = ''): never
+{
+    $url = '/?route=' . rawurlencode($route);
+    if ($message !== '') $url .= '&message=' . rawurlencode($message);
+    header('Location: ' . $url, true, 303);
+    exit;
+}
+
+function team_page_start(string $title, bool $teamArea = false): void
+{
+    $safeTitle = team_e($title);
+    $isTeam = team_user() !== null;
+    echo '<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090c11"><title>' . $safeTitle . ' · Iron Shield</title><link rel="icon" href="/assets/bot-logo.webp?v=20261001-ticketthreads1"><link rel="stylesheet" href="/assets/styles.php?v=20261001-ticketthreads1"><style>
+    .portal-wrap{width:min(1100px,calc(100% - 40px));margin:0 auto;padding:50px 0 90px}.portal-head{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:15px 0;border-bottom:1px solid var(--line)}.portal-brand{display:flex;align-items:center;gap:12px;color:var(--text);text-decoration:none;font:600 13px var(--display);letter-spacing:.12em}.portal-brand img{width:34px;height:34px;object-fit:contain}.portal-links{display:flex;align-items:center;gap:18px}.portal-links a{color:var(--text);text-decoration:none;font-size:12px}.portal-title{font:500 clamp(36px,6vw,58px)/1.05 var(--display);letter-spacing:-.055em;margin:45px 0 12px}.portal-subtitle,.portal-muted{color:var(--muted);line-height:1.7}.portal-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px;margin:16px 0}.portal-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.portal-label{display:block;color:var(--muted);font-size:11px;margin:13px 0 6px}.portal-input,.portal-select,.portal-textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--text);padding:12px;font:inherit}.portal-textarea{min-height:130px;resize:vertical}.portal-button{border:0;border-radius:999px;padding:12px 18px;background:var(--green);color:#101810;font-weight:700;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:8px}.portal-button.secondary{background:transparent;border:1px solid var(--line);color:var(--text)}.portal-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:17px}.portal-flash{padding:12px 15px;border:1px solid var(--line);border-radius:10px;margin-top:18px;color:var(--green)}.portal-ticket{display:block;color:var(--text);text-decoration:none}.portal-ticket:hover{border-color:var(--green)}.portal-meta{font-size:11px;color:var(--muted)}.portal-message{white-space:pre-wrap;line-height:1.65;margin:8px 0}.portal-perms{display:flex;flex-wrap:wrap;gap:14px;margin:12px 0}.portal-perms label{font-size:12px;color:var(--muted)}.portal-perms input{accent-color:var(--green)}@media(max-width:640px){.portal-wrap{padding-top:22px}.portal-head{align-items:flex-start}.portal-links{gap:10px;flex-wrap:wrap;justify-content:flex-end}.portal-card{padding:16px}}
+    </style></head><body><div class="ambient ambient-one"></div><div class="ambient ambient-two"></div><header class="portal-head" style="width:min(1100px,calc(100% - 40px));margin:auto"><a class="portal-brand" href="/" aria-label="Zur Startseite"><img src="/assets/bot-logo.webp?v=20261001-ticketthreads1" alt="">IRON SHIELD</a><nav class="portal-links"><a href="/?route=support">Ticket-Support</a>';
+    if ($isTeam) echo '<a href="/?route=team">Team</a><form method="post" action="/?route=team_logout" style="margin:0"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><button class="portal-button secondary" type="submit">Abmelden</button></form>';
+    elseif (!empty($_SESSION['user'])) echo '<form method="post" action="/?route=logout" style="margin:0"><button class="portal-button secondary" type="submit">Abmelden</button></form>';
+    else echo '<a href="/?route=login">Discord anmelden</a>';
+    echo '</nav></header><main class="portal-wrap">';
+    if ($teamArea && !$isTeam) echo '<p class="portal-muted">Teamzugriff</p>';
+    if (isset($_GET['message'])) echo '<div class="portal-flash">' . team_e((string)$_GET['message']) . '</div>';
+}
+
+function team_page_end(): void { echo '</main></body></html>'; }
+
+function team_render_public_announcements(): string
+{
+    try {
+        $announcements = team_store(static function (array &$data): array {
+            $now = time();
+            $items = array_values(array_filter($data['announcements'] ?? [], static fn($item) => is_array($item) && (empty($item['expiresAt']) || (int)$item['expiresAt'] > $now)));
+            usort($items, static fn(array $a, array $b): int => (int)($b['createdAt'] ?? 0) <=> (int)($a['createdAt'] ?? 0));
+            return array_slice($items, 0, 4);
+        });
+        if (!$announcements) return '';
+        $html = '<section class="public-announcements section-wrap"><div class="announcement-heading"><span class="portal-kicker">IRON SHIELD · NEUIGKEITEN</span><h2>Aktuelles<span>.</span></h2></div><div class="announcement-grid">';
+        foreach ($announcements as $item) {
+            $html .= '<article class="announcement-card"><span class="announcement-meta">' . team_e((string)($item['createdBy'] ?? 'Iron Shield Team')) . ' · ' . date('d.m.Y H:i', (int)($item['createdAt'] ?? time())) . '</span><h3>' . team_e((string)($item['title'] ?? 'Mitteilung')) . '</h3><p>' . nl2br(team_e((string)($item['body'] ?? ''))) . '</p>';
+            if (!empty($item['expiresAt'])) $html .= '<span class="announcement-expiry">Angezeigt bis ' . (new DateTimeImmutable('@' . (int)$item['expiresAt']))->setTimezone(new DateTimeZone('Europe/Berlin'))->format('d.m.Y H:i') . '</span>';
+            $html .= '</article>';
+        }
+        return $html . '</div></section>';
+    } catch (Throwable $error) {
+        error_log('Iron Shield public announcements: ' . $error->getMessage());
+        return '';
+    }
+}
+
+function team_handle_request(string $route): void
+{
+    if ($route === 'team_login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        team_verify_csrf();
+        $username = trim((string)($_POST['username'] ?? ''));
+        $password = (string)($_POST['password'] ?? '');
+        $user = team_store(static function (array &$data) use ($username): ?array {
+            foreach ($data['users'] as $entry) if (is_array($entry) && strcasecmp((string)$entry['username'], $username) === 0) return $entry;
+            return null;
+        });
+        if (!$user || !password_verify($password, (string)$user['passwordHash'])) team_redirect('team_login', 'Anmeldung fehlgeschlagen.');
+        session_regenerate_id(true);
+        $_SESSION['team_user'] = ['id' => $user['id'], 'username' => $user['username'], 'displayName' => $user['displayName'] ?? $user['username'], 'admin' => (bool)$user['admin'], 'permissions' => $user['permissions']];
+        unset($_SESSION['user'], $_SESSION['access_token'], $_SESSION['refresh_token'], $_SESSION['token_expires_at']);
+        team_redirect('team');
+    }
+    if ($route === 'team_logout' && $_SERVER['REQUEST_METHOD'] === 'POST') { team_verify_csrf(); unset($_SESSION['team_user']); team_redirect('team_login', 'Du wurdest abgemeldet.'); }
+    if (!str_starts_with($route, 'team') && !in_array($route, ['support', 'ticket', 'ticket_create', 'ticket_reply', 'ticket_close', 'ticket_claim', 'ticket_attachment', 'ticket_poll', 'announcement_create', 'announcement_delete'], true)) return;
+    if ($route === 'ticket_poll' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        $id = (string)($_GET['id'] ?? '');
+        $after = max(0, (int)($_GET['after'] ?? 0));
+        if (!preg_match('/^[a-f0-9]{16}$/', $id)) json_response(400, ['error' => 'Ungültige Ticket-ID.']);
+        $staff = team_user(); $discordUser = $_SESSION['user'] ?? null;
+        $ticket = team_store(static function (array &$data) use ($id, $staff, $discordUser): ?array {
+            foreach ($data['tickets'] as $entry) if (($entry['id'] ?? '') === $id && (($staff && team_has('tickets_view')) || (!$staff && $discordUser && ($entry['ownerId'] ?? '') === $discordUser['id']))) return $entry;
+            return null;
+        });
+        if (!$ticket) json_response(404, ['error' => 'Ticket nicht gefunden oder kein Zugriff.']);
+        $messages = is_array($ticket['messages'] ?? null) ? $ticket['messages'] : [];
+        $html = '';
+        foreach (array_slice($messages, $after, null, true) as $message) {
+            $html .= '<article class="portal-card ticket-message ' . (!empty($message['team']) ? 'from-team' : 'from-user') . '"><strong>' . (!empty($message['team']) ? '<span class="team-message-tag">TEAM</span> ' : '') . team_e((string)($message['authorName'] ?? 'Nutzer')) . '</strong><span class="portal-meta"> · ' . date('d.m.Y H:i', (int)($message['createdAt'] ?? time())) . '</span><p class="portal-message">' . team_e((string)($message['body'] ?? '')) . '</p>' . team_render_attachments(is_array($message['attachments'] ?? null) ? $message['attachments'] : [], $id) . '</article>';
+        }
+        json_response(200, ['html' => $html, 'count' => count($messages), 'status' => (string)($ticket['status'] ?? 'closed')]);
+    }
+    if ($route === 'ticket_attachment') {
+        $id = (string)($_GET['id'] ?? ''); $attachmentId = (string)($_GET['file'] ?? '');
+        $staff = team_user(); $discordUser = $_SESSION['user'] ?? null;
+        if (!preg_match('/^[a-f0-9]{16}$/', $id) || !preg_match('/^[a-f0-9]{40}$/', $attachmentId)) { http_response_code(404); exit; }
+        $attachment = team_store(static function (array &$data) use ($id, $attachmentId, $staff, $discordUser): ?array {
+            foreach ($data['tickets'] as $ticket) if (($ticket['id'] ?? '') === $id && (($staff && team_has('tickets_view')) || (!$staff && $discordUser && ($ticket['ownerId'] ?? '') === $discordUser['id']))) {
+                foreach ($ticket['messages'] ?? [] as $message) foreach ($message['attachments'] ?? [] as $item) if (($item['id'] ?? '') === $attachmentId) return $item;
+            }
+            return null;
+        });
+        $extensions = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp', 'video/mp4' => 'mp4', 'video/webm' => 'webm', 'video/quicktime' => 'mov'];
+        $mime = is_array($attachment) ? (string)($attachment['mime'] ?? '') : '';
+        $path = isset($extensions[$mime]) ? team_data_dir() . DIRECTORY_SEPARATOR . 'attachments' . DIRECTORY_SEPARATOR . $attachmentId . '.' . $extensions[$mime] : '';
+        if ($path === '' || !is_file($path) || team_detect_mime($path) !== $mime) { http_response_code(404); exit; }
+        $filename = rawurlencode(team_safe_filename((string)($attachment['name'] ?? 'Anhang')));
+        header('Content-Type: ' . $mime); header('Content-Length: ' . (string)filesize($path)); header('Content-Disposition: inline; filename="attachment"; filename*=UTF-8\'\'' . $filename);
+        header('Cache-Control: private, no-store, max-age=0'); header('X-Content-Type-Options: nosniff'); header("Content-Security-Policy: default-src 'none'; img-src 'self'; media-src 'self'; sandbox");
+        readfile($path); exit;
+    }
+    if (in_array($route, ['team_create_user', 'team_permissions', 'team_reset_password', 'ticket_create', 'ticket_reply', 'ticket_close', 'ticket_claim', 'announcement_create', 'announcement_delete'], true) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        team_verify_csrf();
+        if ($route === 'announcement_create') {
+            if (!team_has('announcements_manage')) team_redirect('team', 'Du darfst keine Ankündigungen veröffentlichen.');
+            $title = trim((string)($_POST['title'] ?? '')); $body = trim((string)($_POST['body'] ?? '')); $expiresInput = trim((string)($_POST['expires_at'] ?? ''));
+            $expiresAt = null;
+            if ($expiresInput !== '') {
+                $expires = DateTimeImmutable::createFromFormat('!Y-m-d\TH:i', $expiresInput, new DateTimeZone('Europe/Berlin'));
+                $dateErrors = DateTimeImmutable::getLastErrors();
+                if (!$expires || ($dateErrors !== false && ($dateErrors['warning_count'] > 0 || $dateErrors['error_count'] > 0)) || $expires->getTimestamp() <= time()) team_redirect('team', 'Bitte wähle einen gültigen Ablaufzeitpunkt in der Zukunft.');
+                $expiresAt = $expires->getTimestamp();
+            }
+            if (team_length($title) < 2 || team_length($title) > 100 || $body === '' || team_length($body) > 2000) team_redirect('team', 'Titel und Text prüfen (Titel 2–100, Text höchstens 2.000 Zeichen).');
+            $staff = team_user(); $announcement = ['id' => bin2hex(random_bytes(8)), 'title' => $title, 'body' => $body, 'createdBy' => (string)($staff['displayName'] ?? $staff['username']), 'createdAt' => time(), 'expiresAt' => $expiresAt];
+            team_store(static function (array &$data) use ($announcement): void { $data['announcements'] ??= []; $data['announcements'][] = $announcement; }, true);
+            team_redirect('team', 'Ankündigung wurde veröffentlicht.');
+        }
+        if ($route === 'announcement_delete') {
+            if (!team_has('announcements_manage')) team_redirect('team', 'Du darfst keine Ankündigungen verwalten.');
+            $id = (string)($_POST['id'] ?? '');
+            team_store(static function (array &$data) use ($id): void { $data['announcements'] = array_values(array_filter($data['announcements'] ?? [], static fn($item) => (string)($item['id'] ?? '') !== $id)); }, true);
+            team_redirect('team', 'Ankündigung wurde entfernt.');
+        }
+        if ($route === 'team_create_user') {
+            if (!team_has('users_manage')) team_redirect('team', 'Du darfst keine Teamkonten verwalten.');
+            $displayName = trim((string)($_POST['display_name'] ?? '')); $username = trim((string)($_POST['username'] ?? '')); $password = (string)($_POST['password'] ?? '');
+            if (team_length($displayName) < 2 || team_length($displayName) > 60 || !preg_match('/^[A-Za-z0-9_.-]{3,32}$/', $username) || strlen($password) < 12 || strlen($password) > 200) team_redirect('team', 'Bitte Namen, Benutzername und Passwort prüfen (Name 2–60, Benutzername 3–32, Passwort mindestens 12 Zeichen).');
+            team_store(static function (array &$data) use ($displayName, $username, $password): void {
+                foreach ($data['users'] as $entry) if (strcasecmp((string)$entry['username'], $username) === 0) throw new RuntimeException('Dieser Teamname ist bereits vergeben.');
+                $permissions = team_permissions(); $permissions['users_manage'] = in_array('users_manage', $_POST['permissions'] ?? [], true); $permissions['announcements_manage'] = in_array('announcements_manage', $_POST['permissions'] ?? [], true);
+                $data['users'][] = ['id' => bin2hex(random_bytes(12)), 'displayName' => $displayName, 'username' => $username, 'passwordHash' => password_hash($password, PASSWORD_DEFAULT), 'permissions' => $permissions, 'admin' => false, 'createdAt' => time()];
+            }, true);
+            team_redirect('team', 'Teamkonto wurde angelegt.');
+        }
+        if ($route === 'team_permissions') {
+            if (!team_has('users_manage')) team_redirect('team', 'Du darfst keine Rechte ändern.');
+            $id = (string)($_POST['id'] ?? '');
+            team_store(static function (array &$data) use ($id): void {
+                foreach ($data['users'] as &$entry) if (($entry['id'] ?? '') === $id && empty($entry['admin'])) { $entry['permissions']['tickets_view'] = true; $entry['permissions']['tickets_reply'] = true; $entry['permissions']['users_manage'] = in_array('users_manage', $_POST['permissions'] ?? [], true); $entry['permissions']['announcements_manage'] = in_array('announcements_manage', $_POST['permissions'] ?? [], true); break; }
+                unset($entry);
+            }, true);
+            team_redirect('team', 'Rechte wurden gespeichert.');
+        }
+        if ($route === 'team_reset_password') {
+            if (!team_has('users_manage')) team_redirect('team', 'Du darfst keine Passwörter zurücksetzen.');
+            $id = (string)($_POST['id'] ?? '');
+            $temporaryPassword = rtrim(strtr(base64_encode(random_bytes(18)), '+/', '-_'), '=');
+            $resetUser = team_store(static function (array &$data) use ($id, $temporaryPassword): ?array {
+                foreach ($data['users'] as &$entry) if (($entry['id'] ?? '') === $id && empty($entry['admin'])) {
+                    $entry['passwordHash'] = password_hash($temporaryPassword, PASSWORD_DEFAULT);
+                    $userInfo = ['username' => (string)$entry['username'], 'displayName' => (string)($entry['displayName'] ?? $entry['username'])];
+                    unset($entry);
+                    return $userInfo;
+                }
+                unset($entry); return null;
+            }, true);
+            if (!$resetUser) team_redirect('team', 'Teamkonto wurde nicht gefunden oder kann nicht zurückgesetzt werden.');
+            $_SESSION['team_password_notice'] = ['username' => $resetUser['username'], 'displayName' => $resetUser['displayName'], 'password' => $temporaryPassword];
+            team_redirect('team', 'Neues Passwort erstellt. Kopiere es jetzt sicher.');
+        }
+        if ($route === 'ticket_create') {
+            if (empty($_SESSION['user'])) team_redirect('login');
+            $subject = trim((string)($_POST['subject'] ?? '')); $body = trim((string)($_POST['body'] ?? ''));
+            $categories = ['security', 'technical', 'bug', 'question', 'other'];
+            $category = (string)($_POST['category'] ?? 'question');
+            $priority = (string)($_POST['priority'] ?? 'normal');
+            $serverId = trim((string)($_POST['server_id'] ?? ''));
+            $serverName = '';
+            if ($serverId !== '') {
+                foreach (($_SESSION['discord_guilds'] ?? []) as $guild) {
+                    if (is_array($guild) && (string)($guild['id'] ?? '') === $serverId) { $serverName = (string)($guild['name'] ?? ''); break; }
+                }
+                if ($serverName === '') team_redirect('support', 'Bitte wähle einen Server aus deiner Discord-Serverliste. Melde dich gegebenenfalls erneut an.');
+            }
+            $tried = trim((string)($_POST['tried'] ?? ''));
+            if ($subject === '' || team_length($subject) > 120 || $body === '' || team_length($body) > 10000 || !in_array($category, $categories, true) || !in_array($priority, ['normal', 'high'], true) || team_length($serverName) > 100 || ($serverId !== '' && !preg_match('/^\d{15,22}$/', $serverId)) || team_length($tried) > 3000) team_redirect('support', 'Bitte prüfe die Angaben. Betreff max. 120, Nachricht max. 10.000 und Zusatzinfos max. 3.000 Zeichen.');
+            $attachments = team_save_attachments();
+            $id = bin2hex(random_bytes(8)); $owner = $_SESSION['user']; $now = time();
+            $ticket = ['id' => $id, 'subject' => $subject, 'category' => $category, 'priority' => $priority, 'serverName' => $serverName, 'serverId' => $serverId, 'tried' => $tried, 'ownerId' => $owner['id'], 'ownerName' => $owner['username'], 'assignedTo' => null, 'assignedName' => null, 'status' => 'open', 'createdAt' => $now, 'updatedAt' => $now, 'messages' => [['authorId' => $owner['id'], 'authorName' => $owner['username'], 'team' => false, 'body' => $body, 'attachments' => $attachments, 'createdAt' => $now]]];
+            team_store(static function (array &$data) use ($ticket): void { $data['tickets'][] = $ticket; }, true);
+            header('Location: /?route=ticket&id=' . rawurlencode($id) . '&message=' . rawurlencode('Ticket wurde gespeichert. Es wurde nichts an Discord gesendet oder dort erstellt.'), true, 303);
+            exit;
+        }
+        if ($route === 'ticket_reply') {
+            $id = (string)($_POST['id'] ?? ''); $body = trim((string)($_POST['body'] ?? ''));
+            $staff = team_user(); $discordUser = $_SESSION['user'] ?? null;
+            if (($staff && !team_has('tickets_reply')) || (!$staff && !$discordUser)) team_redirect('support', 'Du darfst hier nicht antworten.');
+            if ($body === '' || team_length($body) > 10000) { header('Location: /?route=ticket&id=' . rawurlencode($id) . '&message=' . rawurlencode('Nachricht ist leer oder zu lang.'), true, 303); exit; }
+            $attachments = team_save_attachments();
+            team_store(static function (array &$data) use ($id, $body, $staff, $discordUser, $attachments): void {
+                foreach ($data['tickets'] as &$ticket) if (($ticket['id'] ?? '') === $id) {
+                    if (!$staff && ($ticket['ownerId'] ?? '') !== ($discordUser['id'] ?? '')) throw new RuntimeException('Dieses Ticket gehört einem anderen Discord-Konto.');
+                    if (($ticket['status'] ?? '') !== 'open') throw new RuntimeException('Dieses Ticket ist geschlossen.');
+                    $author = $staff ?? $discordUser;
+                    if ($staff && empty($ticket['assignedTo'])) { $ticket['assignedTo'] = $staff['id']; $ticket['assignedName'] = $staff['displayName'] ?? $staff['username']; }
+                    $ticket['messages'][] = ['authorId' => $author['id'], 'authorName' => $staff ? ($staff['displayName'] ?? $staff['username']) : $author['username'], 'team' => $staff !== null, 'body' => $body, 'attachments' => $attachments, 'createdAt' => time()]; $ticket['updatedAt'] = time();
+                    return;
+                }
+                throw new RuntimeException('Ticket wurde nicht gefunden.');
+            }, true);
+            header('Location: /?route=ticket&id=' . rawurlencode($id) . '&message=' . rawurlencode('Antwort wurde gesendet.'), true, 303); exit;
+        }
+        if ($route === 'ticket_claim') {
+            $staff = team_user(); $id = (string)($_POST['id'] ?? '');
+            if (!$staff) team_redirect('team_login', 'Bitte melde dich im Team an.');
+            team_store(static function (array &$data) use ($id, $staff): void {
+                foreach ($data['tickets'] as &$ticket) if (($ticket['id'] ?? '') === $id) {
+                    if (($ticket['status'] ?? '') !== 'open') throw new RuntimeException('Geschlossene Tickets können nicht übernommen werden.');
+                    $ticket['assignedTo'] = $staff['id']; $ticket['assignedName'] = $staff['displayName'] ?? $staff['username']; $ticket['updatedAt'] = time();
+                    return;
+                }
+                throw new RuntimeException('Ticket wurde nicht gefunden.');
+            }, true);
+            header('Location: /?route=ticket&id=' . rawurlencode($id) . '&message=' . rawurlencode('Ticket wurde dir zugewiesen.'), true, 303); exit;
+        }
+        if ($route === 'ticket_close') {
+            $id = (string)($_POST['id'] ?? '');
+            $staff = team_user(); $discordUser = $_SESSION['user'] ?? null;
+            team_store(static function (array &$data) use ($id, $staff, $discordUser): void {
+                foreach ($data['tickets'] as &$ticket) if (($ticket['id'] ?? '') === $id) {
+                    if (!$staff && (!$discordUser || ($ticket['ownerId'] ?? '') !== ($discordUser['id'] ?? ''))) throw new RuntimeException('Du darfst nur eigene Tickets schließen.');
+                    $ticket['status'] = 'closed'; $ticket['updatedAt'] = time(); return;
+                }
+                throw new RuntimeException('Ticket wurde nicht gefunden.');
+            }, true);
+            header('Location: /?route=ticket&id=' . rawurlencode($id) . '&message=' . rawurlencode('Ticket geschlossen.'), true, 303); exit;
+        }
+    }
+    if ($route === 'team_login') {
+        team_page_start('Teamanmeldung'); echo '<h1 class="portal-title">Teamanmeldung<span style="color:var(--green)">.</span></h1><p class="portal-subtitle">Melde dich mit deinem Iron Shield Teamkonto an.</p><form class="portal-card" method="post" action="/?route=team_login"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><label class="portal-label">Benutzername<input class="portal-input" name="username" autocomplete="username" required></label><label class="portal-label">Passwort<input class="portal-input" type="password" name="password" autocomplete="current-password" required></label><div class="portal-actions"><button class="portal-button" type="submit">Anmelden</button><a class="portal-button secondary" href="/">Zur Startseite</a></div></form>'; team_page_end(); exit;
+    }
+    if ($route === 'team') {
+        $staff = team_user(); if (!$staff) team_redirect('team_login');
+        team_page_start('Teamverwaltung', true);
+        echo '<h1 class="portal-title">Teamverwaltung<span style="color:var(--green)">.</span></h1><p class="portal-subtitle">Willkommen, ' . team_e((string)($staff['displayName'] ?? $staff['username'])) . ($staff['admin'] ? ' · Owner-Verwaltung' : ' · Teammitglied') . '</p><div class="portal-actions"><a class="portal-button" href="/?route=support">Zum Support-Postfach</a></div>';
+        if (team_has('users_manage')) {
+            $storageStats = team_store(static fn(array &$data): array => ['users' => count($data['users'] ?? []), 'tickets' => count($data['tickets'] ?? []), 'announcements' => count($data['announcements'] ?? [])]);
+            $storePath = team_data_dir() . DIRECTORY_SEPARATOR . 'store.json';
+            $storeModified = is_file($storePath) ? date('d.m.Y H:i:s', (int)filemtime($storePath)) : 'noch nicht geschrieben';
+            echo '<section class="portal-card"><span class="portal-kicker">PERSISTENZ</span><h2>Datenspeicher</h2><p class="portal-muted">' . (int)$storageStats['users'] . ' Teamkonten · ' . (int)$storageStats['tickets'] . ' Tickets · ' . (int)$storageStats['announcements'] . ' Ankündigungen</p><p class="portal-meta">Speicherdatei: <code>' . team_e($storePath) . '</code><br>Letzte Speicherung: ' . team_e($storeModified) . '</p></section>';
+        }
+        if (!empty($_SESSION['team_password_notice'])) {
+            $notice = $_SESSION['team_password_notice']; unset($_SESSION['team_password_notice']);
+            echo '<section class="portal-card password-notice"><strong>Neues Passwort für ' . team_e((string)$notice['displayName']) . '</strong><p>Dieses Passwort wird nur einmal angezeigt. Kopiere es und teile es sicher mit dem Teammitglied.</p><div class="password-copy-row"><input class="portal-input" id="new-team-password" readonly value="' . team_e((string)$notice['password']) . '"><button class="portal-button secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById(\'new-team-password\').value).then(()=>this.textContent=\'Kopiert\')">Kopieren</button></div><span class="portal-meta">Benutzername: ' . team_e((string)$notice['username']) . '</span></section>';
+        }
+        if (team_has('users_manage')) {
+            $users = team_store(static fn(array &$data): array => $data['users']);
+            echo '<section class="portal-card"><span class="portal-kicker">ZUGRIFF VERWALTEN</span><h2>Teamkonten</h2><p class="portal-muted">Teammitglieder können alle Tickets lesen, übernehmen und beantworten. Du kannst ihre Kontodaten ansehen und ein neues Passwort erzeugen.</p><div class="portal-grid team-account-grid">';
+            foreach ($users as $person) {
+                $isAdmin = !empty($person['admin']);
+                echo '<article class="portal-card team-account"><div class="team-account-head"><div><strong>' . team_e((string)($person['displayName'] ?? $person['username'])) . ($isAdmin ? ' · Owner' : '') . '</strong><span class="portal-meta">Benutzername: ' . team_e((string)$person['username']) . '</span></div><span class="ticket-state">' . ($isAdmin ? 'Admin' : 'Team') . '</span></div><p class="portal-meta">Erstellt: ' . date('d.m.Y', (int)($person['createdAt'] ?? time())) . ' · Tickets lesen, übernehmen und beantworten</p>';
+                if (!$isAdmin) {
+                    echo '<form method="post" action="/?route=team_permissions" class="account-permissions"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><input type="hidden" name="id" value="' . team_e((string)$person['id']) . '"><label><input type="checkbox" name="permissions[]" value="users_manage" ' . (!empty($person['permissions']['users_manage']) ? 'checked' : '') . '> Darf Teamkonten verwalten</label><label><input type="checkbox" name="permissions[]" value="announcements_manage" ' . (!empty($person['permissions']['announcements_manage']) ? 'checked' : '') . '> Darf Ankündigungen veröffentlichen</label><button class="portal-button secondary" type="submit">Rechte speichern</button></form><form method="post" action="/?route=team_reset_password" onsubmit="return confirm(\'Neues Passwort für dieses Teamkonto erzeugen?\')"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><input type="hidden" name="id" value="' . team_e((string)$person['id']) . '"><button class="portal-button secondary" type="submit">Passwort zurücksetzen</button></form>';
+                }
+                echo '</article>';
+            }
+            echo '</div><h3>Teamkonto hinzufügen</h3><form class="team-create-form" method="post" action="/?route=team_create_user"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><div class="portal-grid"><label class="portal-label">Anzeigename<input class="portal-input" name="display_name" minlength="2" maxlength="60" autocomplete="name" required></label><label class="portal-label">Benutzername fürs Login<input class="portal-input" name="username" minlength="3" maxlength="32" autocomplete="off" required></label><label class="portal-label">Startpasswort (mind. 12 Zeichen)<input class="portal-input" type="password" name="password" minlength="12" autocomplete="new-password" required></label></div><label class="account-permission"><input type="checkbox" name="permissions[]" value="users_manage"> Darf ebenfalls Teamkonten verwalten</label><label class="account-permission"><input type="checkbox" name="permissions[]" value="announcements_manage"> Darf Ankündigungen auf der Startseite veröffentlichen</label><button class="portal-button" type="submit">Teamkonto erstellen</button></form></section>';
+        }
+        if (team_has('announcements_manage')) {
+            $announcements = team_store(static fn(array &$data): array => $data['announcements'] ?? []);
+            echo '<section class="portal-card"><span class="portal-kicker">STARTSEITE · AKTUELLES</span><h2>Ankündigungen</h2><p class="portal-muted">Veröffentliche eine Nachricht auf der Startseite. Mit „Anzeigen bis“ wird sie automatisch ausgeblendet; ohne Ablauf bleibt sie sichtbar, bis du sie entfernst.</p><form method="post" action="/?route=announcement_create"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><label class="portal-label">Titel<input class="portal-input" name="title" maxlength="100" required></label><label class="portal-label">Nachricht<textarea class="portal-textarea" name="body" maxlength="2000" required></textarea></label><label class="portal-label">Anzeigen bis <span class="optional-label">optional</span><input class="portal-input" type="datetime-local" name="expires_at" min="' . (new DateTimeImmutable('now', new DateTimeZone('Europe/Berlin')))->modify('+1 minute')->format('Y-m-d\TH:i') . '"></label><button class="portal-button" type="submit">Auf der Startseite veröffentlichen</button></form>';
+            foreach (array_reverse($announcements) as $announcement) {
+                $expired = !empty($announcement['expiresAt']) && (int)$announcement['expiresAt'] <= time();
+                echo '<article class="portal-card announcement-admin ' . ($expired ? 'is-expired' : '') . '"><strong>' . team_e((string)($announcement['title'] ?? 'Mitteilung')) . '</strong><p class="portal-muted">' . nl2br(team_e((string)($announcement['body'] ?? ''))) . '</p><span class="portal-meta">' . ($expired ? 'Abgelaufen' : (!empty($announcement['expiresAt']) ? 'Anzeigen bis ' . (new DateTimeImmutable('@' . (int)$announcement['expiresAt']))->setTimezone(new DateTimeZone('Europe/Berlin'))->format('d.m.Y H:i') : 'Ohne Ablauf')) . '</span><form method="post" action="/?route=announcement_delete"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><input type="hidden" name="id" value="' . team_e((string)($announcement['id'] ?? '')) . '"><button class="portal-button secondary" type="submit">Entfernen</button></form></article>';
+            }
+            echo '</section>';
+        }
+        $teamTickets = team_store(static fn(array &$data): array => $data['tickets']);
+        usort($teamTickets, static fn(array $a, array $b): int => (int)($b['updatedAt'] ?? 0) <=> (int)($a['updatedAt'] ?? 0));
+        echo '<section class="portal-card"><span class="portal-kicker">IRON SHIELD · SUPPORT</span><h2>Alle Tickets</h2><p class="portal-muted">Offene und geschlossene Tickets bleiben im privaten Datenspeicher erhalten. Du kannst offene Tickets direkt übernehmen oder schließen.</p>';
+        if (!$teamTickets) echo '<p class="portal-muted">Noch keine Tickets vorhanden.</p>';
+        foreach ($teamTickets as $teamTicket) {
+            $ticketId = (string)($teamTicket['id'] ?? '');
+            $ticketOpen = ($teamTicket['status'] ?? '') === 'open';
+            echo '<article class="portal-card portal-ticket"><div class="ticket-list-title"><a href="/?route=ticket&id=' . rawurlencode($ticketId) . '"><strong>' . team_e((string)($teamTicket['subject'] ?? 'Ticket')) . '</strong></a><span class="ticket-state ' . ($ticketOpen ? 'is-open' : '') . '">' . ($ticketOpen ? 'Offen' : 'Geschlossen') . '</span></div><p class="portal-meta">' . team_e((string)($teamTicket['ownerName'] ?? 'Discord-Nutzer')) . ' · zuletzt aktualisiert ' . date('d.m.Y H:i', (int)($teamTicket['updatedAt'] ?? $teamTicket['createdAt'] ?? time())) . (!empty($teamTicket['assignedName']) ? ' · Zuständig: ' . team_e((string)$teamTicket['assignedName']) : ' · Nicht übernommen') . '</p>';
+            if ($ticketOpen) {
+                echo '<div class="portal-actions"><form method="post" action="/?route=ticket_claim"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><input type="hidden" name="id" value="' . team_e($ticketId) . '"><button class="portal-button secondary" type="submit">' . (($teamTicket['assignedTo'] ?? '') === $staff['id'] ? 'Erneut übernehmen' : 'Ticket übernehmen') . '</button></form><form method="post" action="/?route=ticket_close" onsubmit="return confirm(\'Ticket wirklich schließen?\')"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><input type="hidden" name="id" value="' . team_e($ticketId) . '"><button class="portal-button secondary" type="submit">Ticket schließen</button></form><a class="portal-button" href="/?route=ticket&id=' . rawurlencode($ticketId) . '">Antworten / Details</a></div>';
+            } else echo '<a class="portal-button secondary" href="/?route=ticket&id=' . rawurlencode($ticketId) . '">Ticket ansehen</a>';
+            echo '</article>';
+        }
+        echo '</section>';
+        team_page_end(); exit;
+    }
+    if ($route === 'support') {
+        if (empty($_SESSION['user']) && !team_user()) { team_page_start('Ticket-Support'); echo '<section class="portal-feature"><span class="portal-kicker">OFFIZIELLE SUPPORT-SEITE · IRON SHIELD</span><h1 class="portal-title">Iron Shield Support<span style="color:var(--green)">.</span></h1><p class="portal-subtitle">Dies ist die Support-Seite von Iron Shield. Melde dich mit Discord an, um ein Ticket zu öffnen und direkt mit unserem Team zu kommunizieren.</p><a class="portal-button" href="/?route=login&amp;next=support">Mit Discord anmelden und Ticket öffnen <span>↗</span></a></section>'; team_page_end(); exit; }
+        $staff = team_user(); $tickets = team_store(static function (array &$data) use ($staff): array { return array_values(array_filter($data['tickets'], static fn($ticket) => $staff ? team_has('tickets_view') : ($ticket['ownerId'] ?? '') === ($_SESSION['user']['id'] ?? ''))); });
+        team_page_start('Ticket-Support'); echo '<span class="portal-kicker">OFFIZIELLE SUPPORT-SEITE · IRON SHIELD</span><h1 class="portal-title">' . ($staff ? 'Support-Postfach' : 'Deine Support-Tickets') . '<span style="color:var(--green)">.</span></h1><p class="portal-subtitle">' . ($staff ? 'Dies ist die Support-Seite von Iron Shield. Hier siehst und bearbeitest du alle Tickets der Community.' : 'Dies ist die Support-Seite von Iron Shield. Öffne ein Ticket und kommuniziere direkt mit unserem Team.') . '</p>';
+        if (!$staff) { $serverOptions = '<option value="">Kein bestimmter Server</option>'; foreach (($_SESSION['discord_guilds'] ?? []) as $guildOption) { if (is_array($guildOption)) $serverOptions .= '<option value="' . team_e((string)($guildOption['id'] ?? '')) . '">' . team_e((string)($guildOption['name'] ?? 'Discord-Server')) . '</option>'; } echo '<form class="portal-card ticket-form" method="post" enctype="multipart/form-data" action="/?route=ticket_create"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><div class="ticket-form-heading"><div><span class="portal-kicker">NEUES ANLIEGEN</span><h2>Wie können wir helfen?</h2></div><span class="ticket-step">01 <i>/</i> 01</span></div><p class="portal-muted">Beschreibe kurz, was passiert ist. Die markierten Zusatzangaben sind optional und helfen uns, schneller die passende Lösung zu finden.</p><label class="portal-label">Betreff<input class="portal-input" name="subject" maxlength="120" placeholder="Zum Beispiel: Frage zur Server-Sicherheit" required></label><div class="portal-grid ticket-fields"><label class="portal-label">Thema<select class="portal-select" name="category"><option value="security">Sicherheit / Schutz</option><option value="technical">Technischer Support</option><option value="bug">Fehler melden</option><option value="question">Allgemeine Frage</option><option value="other">Sonstiges</option></select></label><label class="portal-label">Dringlichkeit<select class="portal-select" name="priority"><option value="normal">Normal</option><option value="high">Dringend</option></select></label><label class="portal-label">Betroffener Server <span class="optional-label">optional</span><select class="portal-select" name="server_id">' . $serverOptions . '</select><small class="field-hint">Auswahl aus deinen Discord-Servern.</small></label></div><label class="portal-label">Was ist passiert?<textarea class="portal-textarea" name="body" maxlength="10000" placeholder="Beschreibe das Problem oder deine Frage möglichst genau …" required></textarea><small class="field-hint">Bitte sende keine Passwörter, Bot-Tokens oder vertraulichen Zugangsdaten.</small></label><label class="portal-label media-upload-label">Bilder oder Videos anhängen <span class="optional-label">optional · bis zu 3 Dateien, je max. 5 MB</span><input class="portal-input media-upload" type="file" name="attachments[]" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime" multiple></label><details class="optional-details"><summary>Zusätzliche Angaben <span>optional · bereits versucht</span></summary><label class="portal-label">Was hast du bereits ausprobiert?<textarea class="portal-textarea compact-textarea" name="tried" maxlength="3000" placeholder="Schritte, Fehlermeldungen oder Zeitpunkt …"></textarea></label></details><div class="ticket-submit-row"><button class="portal-button" type="submit">Ticket öffnen <span>↗</span></button><span>Deine Antwort erscheint in deinem Support-Postfach.</span></div></form>'; }
+        if (!$tickets) echo '<p class="portal-muted">Noch keine Tickets vorhanden.</p>';
+        foreach (array_reverse($tickets) as $ticket) echo '<a class="portal-card portal-ticket" href="/?route=ticket&id=' . rawurlencode($ticket['id']) . '"><div class="ticket-list-title"><strong>' . team_e($ticket['subject']) . '</strong><span class="ticket-state ' . (($ticket['status'] ?? '') === 'open' ? 'is-open' : '') . '">' . (($ticket['status'] ?? '') === 'open' ? 'Offen' : 'Geschlossen') . '</span></div><p class="portal-meta">' . team_e($ticket['ownerName']) . ' · ' . date('d.m.Y H:i', (int)$ticket['updatedAt']) . ' · ' . team_e(team_ticket_category((string)($ticket['category'] ?? 'question'))) . (!empty($ticket['serverName']) ? ' · ' . team_e((string)$ticket['serverName']) : '') . (!empty($ticket['priority']) && $ticket['priority'] === 'high' ? ' · Dringend' : '') . ($staff ? ' · Zuständig: ' . team_e((string)($ticket['assignedName'] ?? 'Nicht übernommen')) : '') . '</p></a>';
+        team_page_end(); exit;
+    }
+    if ($route === 'ticket') {
+        $id = (string)($_GET['id'] ?? ''); $staff = team_user(); $discordUser = $_SESSION['user'] ?? null;
+        $ticket = team_store(static function (array &$data) use ($id, $staff, $discordUser): ?array { foreach ($data['tickets'] as $entry) if (($entry['id'] ?? '') === $id && (($staff && team_has('tickets_view')) || (!$staff && $discordUser && ($entry['ownerId'] ?? '') === $discordUser['id']))) return $entry; return null; });
+        if (!$ticket) team_redirect('support', 'Ticket nicht gefunden oder kein Zugriff.');
+        team_page_start('Ticket ' . $ticket['id']); echo '<span class="portal-kicker">IRON SHIELD SUPPORT-SEITE · TICKET ' . team_e($ticket['id']) . '</span><h1 class="portal-title">' . team_e($ticket['subject']) . '</h1><p class="portal-subtitle">' . (($ticket['status'] ?? '') === 'open' ? 'Offen' : 'Geschlossen') . ' · erstellt von ' . team_e((string)($ticket['ownerName'] ?? 'Discord-Nutzer')) . (!empty($ticket['assignedName']) ? ' · zuständig: ' . team_e((string)$ticket['assignedName']) : ' · noch nicht übernommen') . '</p><div class="portal-actions"><a class="portal-button secondary" href="/?route=support">← Zurück zu Support</a>';
+        if ($staff && ($ticket['status'] ?? '') === 'open') echo '<form method="post" action="/?route=ticket_claim"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><input type="hidden" name="id" value="' . team_e($id) . '"><button class="portal-button" type="submit">' . (($ticket['assignedTo'] ?? '') === $staff['id'] ? 'Übernommen · erneut zuweisen' : 'Ticket übernehmen') . '</button></form>';
+        echo '</div>';
+        if (!empty($ticket['category']) || !empty($ticket['serverName']) || !empty($ticket['serverId']) || !empty($ticket['tried'])) { echo '<section class="portal-card ticket-context"><span class="portal-kicker">ANGABEN ZUM ANLIEGEN</span><div class="portal-grid">'; if (!empty($ticket['category'])) echo '<div><span class="portal-meta">Thema</span><strong>' . team_e(team_ticket_category((string)$ticket['category'])) . '</strong></div>'; if (!empty($ticket['priority'])) echo '<div><span class="portal-meta">Dringlichkeit</span><strong>' . (($ticket['priority'] ?? '') === 'high' ? 'Dringend' : 'Normal') . '</strong></div>'; if (!empty($ticket['serverName'])) echo '<div><span class="portal-meta">Server</span><strong>' . team_e((string)$ticket['serverName']) . '</strong></div>'; if (!empty($ticket['serverId'])) echo '<div><span class="portal-meta">Server-ID</span><strong>' . team_e((string)$ticket['serverId']) . '</strong></div>'; if (!empty($ticket['tried'])) echo '<div class="ticket-tried"><span class="portal-meta">Bereits ausprobiert</span><p class="portal-message">' . team_e((string)$ticket['tried']) . '</p></div>'; echo '</div></section>'; }
+        echo '<div id="ticket-live-messages" data-ticket-id="' . team_e($id) . '" data-message-count="' . count($ticket['messages']) . '">';
+        foreach ($ticket['messages'] as $message) echo '<article class="portal-card ticket-message ' . (!empty($message['team']) ? 'from-team' : 'from-user') . '"><strong>' . (!empty($message['team']) ? '<span class="team-message-tag">TEAM</span> ' : '') . team_e((string)$message['authorName']) . '</strong><span class="portal-meta"> · ' . date('d.m.Y H:i', (int)$message['createdAt']) . '</span><p class="portal-message">' . team_e($message['body']) . '</p>' . team_render_attachments(is_array($message['attachments'] ?? null) ? $message['attachments'] : [], $id) . '</article>';
+        echo '</div>';
+        if ($ticket['status'] === 'open' && (($staff && team_has('tickets_reply')) || (!$staff && $discordUser))) echo '<form class="portal-card ticket-reply-form" method="post" enctype="multipart/form-data" action="/?route=ticket_reply"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><input type="hidden" name="id" value="' . team_e($id) . '"><label class="portal-label">Antwort<textarea class="portal-textarea" name="body" maxlength="10000" required></textarea></label><label class="portal-label media-upload-label">Bilder oder Videos anhängen <span class="optional-label">optional · bis zu 3 Dateien, je max. 5 MB</span><input class="portal-input media-upload" type="file" name="attachments[]" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime" multiple></label><button class="portal-button" type="submit">Antwort senden</button></form>';
+        if ($ticket['status'] === 'open' && ($staff || ($discordUser && ($ticket['ownerId'] ?? '') === ($discordUser['id'] ?? '')))) echo '<form class="ticket-close-form" method="post" action="/?route=ticket_close" onsubmit="return confirm(\'Ticket wirklich schließen? Danach kannst du nicht mehr antworten.\')"><input type="hidden" name="csrf" value="' . team_e(team_csrf()) . '"><input type="hidden" name="id" value="' . team_e($id) . '"><button class="portal-button secondary" type="submit">Ticket schließen</button></form>';
+        if (($ticket['status'] ?? '') === 'open') echo '<script>(()=>{const box=document.getElementById("ticket-live-messages");if(!box)return;let count=Number(box.dataset.messageCount||0);let busy=false;const poll=async()=>{if(busy||document.hidden)return;busy=true;try{const response=await fetch("/?route=ticket_poll&id="+encodeURIComponent(box.dataset.ticketId)+"&after="+count,{credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}});if(!response.ok)return;const data=await response.json();if(data.status!=="open"){window.location.reload();return}if(data.count>count){const nearBottom=window.innerHeight+window.scrollY>=document.body.scrollHeight-180;box.insertAdjacentHTML("beforeend",data.html);count=data.count;box.dataset.messageCount=String(count);if(nearBottom)window.scrollTo({top:document.body.scrollHeight,behavior:"smooth"})}}catch{}finally{busy=false}};window.setInterval(poll,2500)})();</script>';
+        team_page_end(); exit;
+    }
+}
+

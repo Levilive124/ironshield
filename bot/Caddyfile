@@ -1,0 +1,3 @@
+{$BOT_DOMAIN} {
+    reverse_proxy ticket-bot:8765
+}
