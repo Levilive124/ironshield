@@ -69,8 +69,8 @@ function config(string $key, string $default = ''): string
 function discord_redirect_uri(): string
 {
     $host = strtolower((string)(parse_url('https://' . ($_SERVER['HTTP_HOST'] ?? ''), PHP_URL_HOST) ?: ''));
-    if ($host === 'ironshield.novium.link') return 'https://ironshield.novium.link/?route=callback';
-    if (in_array($host, ['localhost', '127.0.0.1'], true)) return 'http://' . $host . ':8000/?route=callback';
+    if ($host === 'ironshield.novium.link') return 'https://ironshield.novium.link/index.php?route=callback';
+    if (in_array($host, ['localhost', '127.0.0.1'], true)) return 'http://' . $host . ':8000/index.php?route=callback';
     return config('DISCORD_REDIRECT_URI');
 }
 
@@ -499,7 +499,7 @@ if ($route === 'dashboard_module_save' && $_SERVER['REQUEST_METHOD'] === 'POST')
     } catch (Throwable $error) {
         $_SESSION['dashboard_error'] = $error->getMessage();
     }
-    header('Location: /?route=dashboard&guild=' . rawurlencode($guildId), true, 303);
+    header('Location: /index.php?route=dashboard&guild=' . rawurlencode($guildId), true, 303);
     exit;
 }
 
@@ -526,7 +526,7 @@ if ($route === 'dashboard_tickets_save' && $_SERVER['REQUEST_METHOD'] === 'POST'
         });
         $_SESSION['dashboard_notice'] = 'Einstellungen sicher in der Website-Warteschlange gespeichert. Der Bot bestätigt die Übernahme beim nächsten Abgleich.';
     } catch (Throwable $error) { $_SESSION['dashboard_error'] = $error->getMessage(); }
-    header('Location: /?route=dashboard&guild=' . rawurlencode($guildId), true, 303); exit;
+    header('Location: /index.php?route=dashboard&guild=' . rawurlencode($guildId), true, 303); exit;
 }
 
 if ($route === 'dashboard_options') {
@@ -627,7 +627,7 @@ if ($route === 'dashboard' && !empty($_SESSION['user'])) {
 }
 
 if ($route === 'dashboard') {
-    header('Location: /?route=dashboard_login', true, 302);
+    header('Location: /index.php?route=dashboard_login', true, 302);
     exit;
 }
 
@@ -754,7 +754,7 @@ if ($route === 'callback') {
         $_SESSION['user'] = ['id' => $user['id'], 'username' => ($user['global_name'] ?? '') ?: ($user['username'] ?? 'Discord'), 'avatar' => $user['avatar'] ?? null];
         $_SESSION['discord_guilds'] = array_values(array_map(static fn(array $guild): array => ['id' => (string)($guild['id'] ?? ''), 'name' => (string)($guild['name'] ?? ''), 'icon' => (string)($guild['icon'] ?? ''), 'owner' => !empty($guild['owner']), 'permissions' => (string)($guild['permissions'] ?? $guild['permissions_new'] ?? '0'), 'manage' => guild_can_manage($guild)], array_filter($guilds, static fn($guild): bool => is_array($guild) && !empty($guild['id']) && !empty($guild['name']))));
         unset($_SESSION['oauth_next']);
-        header('Location: /?route=' . (($sessionState['next'] ?? '') === 'dashboard' ? 'dashboard' : 'support'), true, 302);
+        header('Location: /index.php?route=' . (($sessionState['next'] ?? '') === 'dashboard' ? 'dashboard' : 'support'), true, 302);
         exit;
     } catch (Throwable $error) {
         error_log('Discord OAuth callback failed: ' . $error->getMessage());
@@ -770,7 +770,7 @@ if ($route === 'logout' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         setcookie(session_name(), '', ['expires' => time() - 42000, 'path' => $params['path'], 'domain' => $params['domain'], 'secure' => $params['secure'], 'httponly' => $params['httponly'], 'samesite' => 'Lax']);
     }
     session_destroy();
-    header('Location: /?route=support', true, 303);
+    header('Location: /index.php?route=support', true, 303);
     exit;
 }
 

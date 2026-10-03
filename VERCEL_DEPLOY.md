@@ -12,7 +12,7 @@ Die private Datensicherung aus dem bisherigen Hosting muss lokal in `.ironshield
 php scripts/import-private-data.php
 ```
 
-Das Script importiert Konten, Tickets, Ankündigungen, Dashboard-Zustand und passende Ticket-Anhänge in einer Transaktion. Wiederholte Aufrufe mit unverändertem Datenstand werden erkannt. Es gibt weder private Inhalte noch Zugangsdaten aus und verändert die Quelldateien nicht.
+Das Script importiert Konten, Tickets, Ankündigungen, Dashboard-Zustand und passende Ticket-Anhänge in einer Transaktion. Der Import-Fingerabdruck berücksichtigt Store, Dashboard-Zustand und Anhänge; unveränderte Wiederholungen werden übersprungen. Bei einem neueren Ticketstand werden neue Nachrichten ergänzt, bestehende Nachrichten bleiben erhalten. Das Script gibt weder private Inhalte noch Zugangsdaten aus und verändert die Quelldateien nicht.
 
 ## Hosting-Werte nach Einrichtung des Speichers
 

@@ -95,7 +95,7 @@ savePreferences();
 
 const announcementsRoot = document.getElementById('public-announcements');
 if (announcementsRoot) {
-  fetch('/?route=public_announcements', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } })
+  fetch('/index.php?route=public_announcements', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } })
     .then((response) => response.ok ? response.json() : null)
     .then((data) => {
       const items = Array.isArray(data?.announcements) ? data.announcements : [];

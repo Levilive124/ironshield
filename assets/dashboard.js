@@ -27,6 +27,13 @@
     message.textContent = text || '';
     message.classList.toggle('is-error', error);
   };
+  async function readApiJson(response) {
+    if (!(response.headers.get('content-type') || '').toLowerCase().includes('application/json')) {
+      throw new Error(`Dashboard-API lieferte kein JSON (HTTP ${response.status}). Bitte API-Endpunkt und Hosting-Routing prüfen.`);
+    }
+    try { return await response.json(); }
+    catch { throw new Error(`Dashboard-API lieferte ungültiges JSON (HTTP ${response.status}).`); }
+  }
   function renderConnection(data) {
     const online = Boolean(data.connected);
     connection.classList.toggle('is-online', online);
@@ -36,9 +43,9 @@
     connectionDetail.textContent = lastSeen ? `Letzter Abgleich vor ${Math.max(0, Math.floor(Date.now() / 1000) - lastSeen)} Sekunden` : 'Noch keine Verbindung gemeldet';
   }
   async function requestState() {
-    const response = await fetch(`/?route=dashboard_data${guildId ? `&guild=${encodeURIComponent(guildId)}` : ''}`, {credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
-    const data = await response.json();
-    if (response.status === 401) { location.assign('/?route=dashboard_login'); return null; }
+    const response = await fetch(`/index.php?route=dashboard_data${guildId ? `&guild=${encodeURIComponent(guildId)}` : ''}`, {credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
+    const data = await readApiJson(response);
+    if (response.status === 401) { location.assign('/index.php?route=dashboard_login'); return null; }
     if (!response.ok) throw new Error(data.error || 'Dashboard-Daten konnten nicht geladen werden.');
     return data;
   }
@@ -47,8 +54,8 @@
     syncing = true;
     try {
       const query = guildId ? `&guild=${encodeURIComponent(guildId)}` : '';
-      const response = await fetch(`/?route=dashboard_refresh${query}`, {credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
-      const state = await response.json();
+      const response = await fetch(`/index.php?route=dashboard_refresh${query}`, {credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
+      const state = await readApiJson(response);
       if (!response.ok) throw new Error(state.error || 'Bot-Status kann gerade nicht aktualisiert werden.');
       if (state.connection_error || state.error) showMessage(state.connection_error || state.error, true);
       else if (state.relay_refresh_needed) showMessage('Warte auf die Bot-Synchronisierung. Prüfe PUBLIC_SITE_URL und den Bridge-Schlüssel in den Hosting-Umgebungen.');
@@ -86,7 +93,7 @@
       const card = node('article','guild-card');
       card.dataset.guildCard = guild.id;
       const isInvite = guild.checked && !guild.present && guild.manage;
-      const target = isInvite ? `${data.invite_base}&guild_id=${encodeURIComponent(guild.id)}&disable_guild_select=true` : `/?route=dashboard&guild=${encodeURIComponent(guild.id)}`;
+      const target = isInvite ? `${data.invite_base}&guild_id=${encodeURIComponent(guild.id)}&disable_guild_select=true` : `/dashboard.html?guild=${encodeURIComponent(guild.id)}`;
       const anchor = link(target,'guild-open guild-card-link',undefined,isInvite);
       anchor.dataset.guildLink = '';
       const icon = node('div','guild-icon');
@@ -103,7 +110,7 @@
   function renderManage(data) {
     const guild = data.selected;
     const section = node('section','guild-dialog-content');
-    section.append(node('p','').appendChild(link('/?route=dashboard','dashboard-link','← Zur Serverübersicht')).parentElement);
+    section.append(node('p','').appendChild(link('/dashboard.html','dashboard-link','← Zur Serverübersicht')).parentElement);
     section.append(node('h2','',`${guild.name} verwalten`));
     if (!guild.manage) {
       section.append(node('p','','Du brauchst Admin- oder Serververwaltungsrechte, um die Einstellungen zu ändern.'));
@@ -125,7 +132,7 @@
       nav.append(navLink,node('p','dashboard-manage-nav-note','Weitere Funktionen werden hier ergänzt.'));
       const body = node('div','dashboard-manage-content'); body.id='ticketsystem';
       body.append(node('p','','Stelle Ticketing direkt hier ein. Kanäle und Rollen werden aus Discord geladen; deine Änderungen werden mit dem Bot synchronisiert.'));
-      const form = node('form','portal-card ticket-editor'); form.id='ticket-settings-form'; form.method='post'; form.action='/?route=dashboard_tickets_save';
+      const form = node('form','portal-card ticket-editor'); form.id='ticket-settings-form'; form.method='post'; form.action='/index.php?route=dashboard_tickets_save';
       form.addEventListener('input',()=>{form.dataset.dirty='1';});
       form.addEventListener('change',()=>{form.dataset.dirty='1';});
       const csrf = node('input'); csrf.type='hidden'; csrf.name='csrf'; csrf.value=data.csrf;
@@ -158,7 +165,7 @@
       const list=node('div','dashboard-bot-module-list');
       for (const module of category.modules || []) {
         if (!/^[a-z0-9_-]{1,80}$/.test(String(module.key || ''))) continue;
-        const form=node('form','dashboard-bot-module-row'); form.method='post'; form.action='/?route=dashboard_module_save';
+        const form=node('form','dashboard-bot-module-row'); form.method='post'; form.action='/index.php?route=dashboard_module_save';
         const addHidden=(name,value)=>{const input=node('input');input.type='hidden';input.name=name;input.value=value;form.append(input);};
         addHidden('csrf',data.csrf);addHidden('guild_id',data.selected.id);addHidden('module_key',module.key);addHidden('enabled','0');
         const labelNode=node('label','dashboard-bot-module-copy'); const text=node('span');
@@ -191,7 +198,7 @@
       render(data);
       if (!data.bot_token_verified || data.guilds.some(item=>!item.checked) || Date.now()/1000-Number(data.last_seen||0)>45) refreshBot();
     } catch(error) {
-      if (error.message==='login_required') location.assign('/?route=dashboard_login');
+      if (error.message==='login_required') location.assign('/index.php?route=dashboard_login');
       else { showMessage(error.message,true); content.replaceChildren(node('p','dashboard-message is-error',error.message)); }
     }
   }

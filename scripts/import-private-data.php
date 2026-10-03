@@ -38,7 +38,30 @@ if (!is_array($legacy)) {
     exit(1);
 }
 $realSource = realpath($source) ?: $source;
-$migrationKey = 'private-data-' . hash('sha256', $realSource . ':' . hash_file('sha256', $storePath));
+$bridgePath = $source . DIRECTORY_SEPARATOR . 'dashboard-bridge.json';
+$attachmentDir = $source . DIRECTORY_SEPARATOR . 'attachments';
+$sourceFingerprint = hash_init('sha256');
+hash_update($sourceFingerprint, $realSource . "\n" . hash('sha256', $raw));
+if (is_file($bridgePath)) {
+    $bridgeHash = hash_file('sha256', $bridgePath);
+    if (!is_string($bridgeHash)) throw new RuntimeException('Dashboard-Sicherungsdatei konnte nicht geprüft werden.');
+    hash_update($sourceFingerprint, "\nbridge:" . $bridgeHash);
+}
+if (is_dir($attachmentDir)) {
+    $attachmentNames = [];
+    foreach (new DirectoryIterator($attachmentDir) as $file) {
+        if ($file->isDot() || !$file->isFile() || $file->isLink()) continue;
+        if (preg_match('/^[a-f0-9]{40}\.(?:jpe?g|png|gif|webp|mp4|webm|mov)$/i', $file->getFilename()) === 1 && $file->getSize() <= 5 * 1024 * 1024) $attachmentNames[] = $file->getFilename();
+    }
+    sort($attachmentNames, SORT_STRING);
+    foreach ($attachmentNames as $name) {
+        $path = $attachmentDir . DIRECTORY_SEPARATOR . $name;
+        $contentHash = hash_file('sha256', $path);
+        if (!is_string($contentHash)) throw new RuntimeException('Ticket-Anhang konnte nicht geprüft werden.');
+        hash_update($sourceFingerprint, "\nattachment:" . $name . ':' . $contentHash);
+    }
+}
+$migrationKey = 'private-data-' . hash_final($sourceFingerprint);
 $pdo = ironshield_database();
 $pdo->beginTransaction();
 try {
@@ -57,16 +80,56 @@ try {
     $selectState->execute(['key' => 'team_store']);
     $current = json_decode((string)$selectState->fetchColumn(), true);
     if (!is_array($current)) throw new RuntimeException('Zielzustand ist beschädigt.');
+    $canonicalize = static function (mixed $value) use (&$canonicalize): mixed {
+        if (!is_array($value)) return $value;
+        if (!array_is_list($value)) ksort($value, SORT_STRING);
+        foreach ($value as $key => $child) $value[$key] = $canonicalize($child);
+        return $value;
+    };
+    $mergeTicket = static function (array $currentTicket, array $sourceTicket) use ($canonicalize): array {
+        $currentRawMessages = is_array($currentTicket['messages'] ?? null) ? $currentTicket['messages'] : [];
+        $sourceRawMessages = is_array($sourceTicket['messages'] ?? null) ? $sourceTicket['messages'] : [];
+        $messages = array_values(array_filter($currentRawMessages, 'is_array'));
+        $currentCounts = [];
+        $sourceCounts = [];
+        $messageFingerprint = static function (array $message) use ($canonicalize): string {
+            $encoded = json_encode($canonicalize($message), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+            return hash('sha256', $encoded);
+        };
+        foreach ($messages as $message) {
+            $fingerprint = $messageFingerprint($message);
+            $currentCounts[$fingerprint] = ($currentCounts[$fingerprint] ?? 0) + 1;
+        }
+        foreach (array_filter($sourceRawMessages, 'is_array') as $message) {
+            $fingerprint = $messageFingerprint($message);
+            $sourceCounts[$fingerprint] = ($sourceCounts[$fingerprint] ?? 0) + 1;
+            if ($sourceCounts[$fingerprint] > ($currentCounts[$fingerprint] ?? 0)) {
+                $messages[] = $message;
+                $currentCounts[$fingerprint] = ($currentCounts[$fingerprint] ?? 0) + 1;
+            }
+        }
+        usort($messages, static fn(array $a, array $b): int => (int)($a['createdAt'] ?? 0) <=> (int)($b['createdAt'] ?? 0));
+        $currentUpdated = (int)($currentTicket['updatedAt'] ?? 0);
+        $sourceUpdated = (int)($sourceTicket['updatedAt'] ?? 0);
+        $merged = $sourceUpdated > $currentUpdated ? $sourceTicket : $currentTicket;
+        $merged['messages'] = $messages;
+        $merged['updatedAt'] = max($currentUpdated, $sourceUpdated);
+        return $merged;
+    };
     foreach (['users', 'tickets', 'announcements'] as $collection) {
         $current[$collection] = is_array($current[$collection] ?? null) ? $current[$collection] : [];
         foreach (($legacy[$collection] ?? []) as $record) {
             if (!is_array($record)) continue;
             $id = (string)($record['id'] ?? '');
             $duplicate = false;
-            foreach ($current[$collection] as $existing) {
+            foreach ($current[$collection] as $index => $existing) {
                 if (!is_array($existing)) continue;
-                if (($id !== '' && (string)($existing['id'] ?? '') === $id)
-                    || ($collection === 'users' && (string)($record['username'] ?? '') !== '' && strcasecmp((string)($existing['username'] ?? ''), (string)$record['username']) === 0)) {
+                $sameId = $id !== '' && (string)($existing['id'] ?? '') === $id;
+                $sameUsername = $collection === 'users'
+                    && (string)($record['username'] ?? '') !== ''
+                    && strcasecmp((string)($existing['username'] ?? ''), (string)$record['username']) === 0;
+                if ($sameId && $collection === 'tickets') $current[$collection][$index] = $mergeTicket($existing, $record);
+                if ($sameId || $sameUsername) {
                     $duplicate = true;
                     break;
                 }
@@ -83,7 +146,6 @@ try {
         if (is_array($item) && preg_match('/^[a-f0-9]{40}$/', (string)($item['id'] ?? ''))) $attachmentMeta[(string)$item['id']] = $item;
     }
     $mimeByExtension = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp', 'mp4' => 'video/mp4', 'webm' => 'video/webm', 'mov' => 'video/quicktime'];
-    $attachmentDir = $source . DIRECTORY_SEPARATOR . 'attachments';
     if (is_dir($attachmentDir)) {
         $saveAttachment = $pdo->prepare('INSERT INTO ironshield_attachments (attachment_id, mime, filename, data) VALUES (:id, :mime, :filename, :data) ON CONFLICT (attachment_id) DO NOTHING');
         foreach (new DirectoryIterator($attachmentDir) as $file) {
@@ -104,7 +166,6 @@ try {
         }
     }
 
-    $bridgePath = $source . DIRECTORY_SEPARATOR . 'dashboard-bridge.json';
     if (is_file($bridgePath)) {
         $bridge = json_decode((string)file_get_contents($bridgePath), true);
         if (is_array($bridge)) {
