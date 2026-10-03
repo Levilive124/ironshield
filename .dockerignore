@@ -1,0 +1,8 @@
+.env
+**/.env
+.runtime
+.ironshield-private/
+.git
+*.zip
+*.log
+**/sessions/
