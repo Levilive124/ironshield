@@ -93,6 +93,44 @@ function savePreferences() {
 }
 savePreferences();
 
+const announcementsRoot = document.getElementById('public-announcements');
+if (announcementsRoot) {
+  fetch('/?route=public_announcements', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } })
+    .then((response) => response.ok ? response.json() : null)
+    .then((data) => {
+      const items = Array.isArray(data?.announcements) ? data.announcements : [];
+      if (!items.length) return;
+      const section = document.createElement('section');
+      section.className = 'public-announcements section-wrap';
+      const heading = document.createElement('div');
+      heading.className = 'announcement-heading';
+      const kicker = document.createElement('span');
+      kicker.className = 'portal-kicker';
+      kicker.textContent = 'IRON SHIELD · NEUIGKEITEN';
+      const title = document.createElement('h2');
+      title.append(document.createTextNode('Aktuelles'));
+      const dot = document.createElement('span');
+      dot.textContent = '.';
+      title.append(dot);
+      heading.append(kicker, title);
+      const grid = document.createElement('div');
+      grid.className = 'announcement-grid';
+      for (const item of items) {
+        const card = document.createElement('article');
+        card.className = 'announcement-card';
+        const cardTitle = document.createElement('h3');
+        cardTitle.textContent = String(item.title || 'Mitteilung');
+        const body = document.createElement('p');
+        body.textContent = String(item.body || '');
+        card.append(cardTitle, body);
+        grid.append(card);
+      }
+      section.append(heading, grid);
+      announcementsRoot.replaceChildren(section);
+    })
+    .catch(() => {});
+}
+
 menuButton?.addEventListener('click', () => {
   const isOpen = menuButton.getAttribute('aria-expanded') === 'true';
   menuButton.setAttribute('aria-expanded', String(!isOpen));

@@ -634,6 +634,19 @@ if ($route === 'dashboard') {
 }
 
 require_once __DIR__ . '/includes/team.php';
+if ($route === 'public_announcements') {
+    try {
+        $announcements = team_store(static function (array &$data): array {
+            $now = time();
+            $items = array_values(array_filter($data['announcements'] ?? [], static fn($item): bool => is_array($item) && (empty($item['expiresAt']) || (int)$item['expiresAt'] > $now)));
+            return array_slice(array_reverse($items), 0, 6);
+        });
+        json_response(200, ['announcements' => array_map(static fn(array $item): array => ['title' => (string)($item['title'] ?? ''), 'body' => (string)($item['body'] ?? ''), 'created_by' => (string)($item['createdBy'] ?? ''), 'created_at' => (int)($item['createdAt'] ?? 0)], $announcements)]);
+    } catch (Throwable $error) {
+        error_log('Public announcements unavailable: ' . get_class($error));
+        json_response(503, ['error' => 'Ankündigungen sind vorübergehend nicht verfügbar.']);
+    }
+}
 if ($route === 'team_data') {
     try { team_bootstrap_admin(); }
     catch (Throwable $error) { error_log('Iron Shield data bootstrap failed: ' . get_class($error)); json_response(503, ['error' => 'Support-Datenspeicher ist nicht verfügbar.']); }
@@ -759,6 +772,11 @@ if ($route === 'logout' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     session_destroy();
     header('Location: /?route=support', true, 303);
+    exit;
+}
+
+if ($route === '') {
+    header('Location: /index.html', true, 302);
     exit;
 }
 
