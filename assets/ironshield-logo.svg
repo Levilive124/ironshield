@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">Iron Shield</title>
+  <defs>
+    <linearGradient id="shield" x1="36" y1="20" x2="220" y2="238" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c7f59b"/>
+      <stop offset="1" stop-color="#5caa4d"/>
+    </linearGradient>
+    <linearGradient id="steel" x1="80" y1="61" x2="178" y2="195" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f4f8f5"/>
+      <stop offset="1" stop-color="#aebcb5"/>
+    </linearGradient>
+  </defs>
+  <path d="M128 10 231 48v70c0 65-42 105-103 128C67 223 25 183 25 118V48L128 10Z" fill="#101710" stroke="url(#shield)" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M128 31 210 61v57c0 51-31 84-82 106-51-22-82-55-82-106V61l82-30Z" fill="none" stroke="#c7f59b" stroke-opacity=".22" stroke-width="3"/>
+  <path d="M91 76h26v101H91z" fill="url(#steel)"/>
+  <path d="M165 78h-40c-16 0-27 10-27 25 0 14 8 22 25 27l18 5c7 2 10 5 10 9 0 5-4 8-11 8h-39v25h43c20 0 33-11 33-29 0-15-9-24-27-29l-17-5c-7-2-10-4-10-8 0-4 3-6 9-6h33V78Z" fill="url(#steel)"/>
+  <path d="M42 54 128 22l86 32" fill="none" stroke="#fff" stroke-opacity=".13" stroke-width="4" stroke-linecap="round"/>
+</svg>

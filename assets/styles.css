@@ -276,3 +276,5 @@ html,body{width:100%;max-width:100%;overflow-x:hidden}
 @media(max-width:640px){.dashboard-bot-module-list{grid-template-columns:minmax(0,1fr)}.dashboard-bot-module-row{grid-template-columns:minmax(0,1fr) auto;padding:10px}.dashboard-bot-module-row .button{padding:8px 9px}}
 
 .error-page { min-height: 100vh; display: grid; align-content: center; max-width: 680px; }
+
+.dashboard-page .dashboard-eyebrow{display:flex;align-items:center;gap:9px}.dashboard-page .dashboard-eyebrow img{width:26px;height:26px;object-fit:contain}
