@@ -28,7 +28,7 @@ ENV (in /home/container/.env):
     WEBAPI_PORT=33041                       # default: SERVER_PORT
     WEBAPI_CERT=/home/container/secrets/webapi-server.pem   # Cert + Key (PEM)
     WEBAPI_CA=/home/container/secrets/webapi-ca.crt         # CA, die Clients ausstellt
-    WEBAPI_REQUIRE_CLIENT_CERT=1             # 0 nur falls Client-CA-Zugang fehlt
+    WEBAPI_REQUIRE_CLIENT_CERT=0             # 1 nur mit eingerichtetem Client-Zertifikat
     WEBAPI_CLIENT_CN=vercel-dash
     WEBAPI_PATH=<64 Hex>                    # geheimer Pfadanteil
     WEBAPI_HMAC=<64 Hex>                    # Signaturschlüssel
@@ -70,7 +70,7 @@ PORT = int(os.getenv("WEBAPI_PORT") or os.getenv("SERVER_PORT") or 0)
 CERT = os.getenv("WEBAPI_CERT", "")
 CA = os.getenv("WEBAPI_CA", "")
 CLIENT_CN = os.getenv("WEBAPI_CLIENT_CN", "vercel-dash")
-REQUIRE_CLIENT_CERT = os.getenv("WEBAPI_REQUIRE_CLIENT_CERT", "1").strip() != "0"
+REQUIRE_CLIENT_CERT = os.getenv("WEBAPI_REQUIRE_CLIENT_CERT", "0").strip() != "0"
 SECRET_PATH = os.getenv("WEBAPI_PATH", "")
 HMAC_KEY = os.getenv("WEBAPI_HMAC", "").encode()
 ALLOW_ADMIN = os.getenv("WEBAPI_ALLOW_ADMIN", "0") == "1"

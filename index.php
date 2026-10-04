@@ -194,7 +194,10 @@ function dashboard_bot_webapi_request(string $command, array $args, string $acto
     $baseUrl = rtrim(trim(config('DASHBOARD_WEBAPI_URL')), '/');
     $secretPath = trim(config('DASHBOARD_WEBAPI_PATH'));
     $hmacKey = config('DASHBOARD_WEBAPI_HMAC');
-    $requireClientCert = config('DASHBOARD_WEBAPI_REQUIRE_CLIENT_CERT', '1') !== '0';
+    // HMAC-only is the deployment default because serverless website hosts
+    // generally cannot present a client certificate. HTTPS CA validation,
+    // request signing, the secret path, and actor checks remain mandatory.
+    $requireClientCert = config('DASHBOARD_WEBAPI_REQUIRE_CLIENT_CERT', '0') !== '0';
     $tlsFile = static function (string $fileKey, string $pemKey, string $extension): string {
         $pem = trim(config($pemKey));
         if ($pem !== '') {
