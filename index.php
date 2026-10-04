@@ -1,6 +1,11 @@
 <?php
 declare(strict_types=1);
 
+// API failures must never expose PHP paths or stack traces in HTTP responses.
+ini_set('display_errors', '0');
+ini_set('html_errors', '0');
+ini_set('log_errors', '1');
+
 function load_env_file(string $path): void
 {
     if (!is_file($path)) return;
@@ -56,8 +61,18 @@ ini_set('session.use_trans_sid', '0');
 ini_set('session.gc_maxlifetime', '28800');
 session_name('is_sess');
 session_set_cookie_params(['lifetime' => 28800, 'path' => '/', 'secure' => $secureCookie, 'httponly' => true, 'samesite' => 'Lax']);
-if (ironshield_storage_enabled()) session_set_save_handler(new IronShieldPostgresSessionHandler(), true);
-session_start();
+try {
+    if (ironshield_storage_enabled()) session_set_save_handler(new IronShieldPostgresSessionHandler(), true);
+    session_start();
+} catch (Throwable $error) {
+    error_log('Iron Shield session startup failed: ' . get_class($error));
+    $cause = $error;
+    while ($cause->getPrevious() instanceof Throwable) $cause = $cause->getPrevious();
+    $sqlState = $cause instanceof PDOException && isset($cause->errorInfo[0]) ? (string)$cause->errorInfo[0] : '';
+    $errorMessage = 'Die Datenbank ist konfiguriert, aber derzeit nicht erreichbar.';
+    if ($sqlState !== '') $errorMessage .= ' (SQLSTATE ' . $sqlState . ')';
+    json_response(503, ['error' => $errorMessage]);
+}
 if (isset($_SESSION['last_activity']) && time() - (int)$_SESSION['last_activity'] > 28800) {
     $_SESSION = [];
     session_regenerate_id(true);

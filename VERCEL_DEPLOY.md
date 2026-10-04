@@ -20,6 +20,18 @@ Bereits aktive PHP-Sitzungen des bisherigen Hosts werden nicht mitgenommen; die 
 
 ## Hosting-Werte nach Einrichtung des Speichers
 
+### Meldung „DATABASE_URL ist auf Vercel erforderlich“
+
+Diese Meldung bedeutet, dass das aktuelle Deployment keine Datenbank-Verbindungsvariable sieht. Die Sperre bitte nicht aus dem Code entfernen: Ohne dauerhafte Datenbank könnten Sitzungen und Änderungen bei Serverless-Neustarts verloren gehen.
+
+1. Öffne in Vercel das **Projekt → Storage** beziehungsweise den **Marketplace** und füge einen PostgreSQL-Anbieter hinzu, zum Beispiel Neon. Vercel führt PostgreSQL über Marketplace-Integrationen; beim Verbinden werden die Zugangsdaten als Projekt-Umgebungsvariablen bereitgestellt.
+2. Wähle mindestens **Production**. Wenn Preview-Deployments genutzt werden, verbinde auch **Preview** mit einer Datenbank. Prüfe unter **Project → Settings → Environment Variables**, dass der Variablenname exakt `DATABASE_URL` lautet.
+3. Falls die Integration den Namen nicht automatisch anlegt, füge `DATABASE_URL` dort manuell hinzu und trage die vollständige PostgreSQL-Verbindungs-URL des Anbieters ein. Den Wert nur in Vercel speichern, niemals hier im Chat, in HTML/JavaScript oder im Git-Repository.
+4. Speichere die Variable und starte unter **Deployments** für Production ein neues Deployment beziehungsweise ein Redeploy. Vercel wendet geänderte Umgebungsvariablen nicht rückwirkend auf bereits erstellte Deployments an.
+5. Lade das Dashboard nach erfolgreichem Deployment neu. Der Datenbankadapter legt die Tabellen beim ersten API-Aufruf an. Importiere anschließend beziehungsweise vor dem Live-Cutover die vorhandenen privaten Daten mit dem oben beschriebenen `scripts/import-private-data.php` in genau diese Datenbank, damit Teamkonten und Tickets erhalten bleiben.
+
+Vercel dokumentiert das Verbinden von Storage über Marketplace-Integrationen und verlangt für geänderte Variablen ein neues Deployment: [Storage on Vercel](https://vercel.com/docs/marketplace-storage), [Environment Variables](https://vercel.com/docs/environment-variables/managing-environment-variables).
+
 In Vercel unter **Project → Settings → Environment Variables** serverseitig hinterlegen (niemals in `assets/` oder im Browser):
 
 - `DISCORD_CLIENT_ID`
@@ -32,6 +44,8 @@ In Vercel unter **Project → Settings → Environment Variables** serverseitig 
 - `DATABASE_URL` — TLS-geschützte PostgreSQL-Verbindungs-URL (z. B. von Neon)
 
 Der PHP-Session-Handler hält seinen Sperr-Lock in einer eigenen kurzen Transaktion. Daher funktionieren sowohl direkte PostgreSQL-URLs als auch Transaktions-Pooler-URLs; verwende für den Datenbank-Import und für Vercel dieselbe Datenbank und dasselbe Schema.
+
+Bei Neon ergänzt der Adapter die Endpoint-ID aus dem Datenbank-Hostname automatisch als libpq-Verbindungsoption. Das ist ein Fallback für PHP/PostgreSQL-Clients, deren libpq-Build Neon nicht über TLS-SNI routen kann. Der Endpoint-Identifier ist kein Passwort und wird nicht an Browser oder Logs ausgegeben.
 
 Der Bot-Token und der Bridge-Schlüssel bleiben ausschließlich in serverseitigen Umgebungsvariablen. Sie werden nicht in HTML, JavaScript oder statischen Dateien eingebettet. Für Ticketanhänge begrenzt Vercel die Anfragegröße; auf Vercel lässt das Portal daher derzeit insgesamt bis zu 4 MiB pro Upload-Anfrage zu.
 

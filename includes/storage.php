@@ -14,6 +14,16 @@ function ironshield_database_connection(): PDO
     $database = rawurldecode(ltrim((string)$parts['path'], '/'));
     if ($database === '') throw new RuntimeException('DATABASE_URL enthält keinen Datenbanknamen.');
     $dsn = 'pgsql:host=' . $parts['host'] . ';port=' . (int)($parts['port'] ?? 5432) . ';dbname=' . $database . ';sslmode=require';
+    // Some PHP/libpq builds do not send TLS SNI. Neon can route these clients
+    // when the endpoint ID is supplied as a libpq connection option.
+    $host = strtolower((string)$parts['host']);
+    if (str_ends_with($host, '.neon.tech')) {
+        $endpointId = explode('.', $host, 2)[0];
+        $endpointId = preg_replace('/-pooler$/', '', $endpointId) ?? '';
+        if (preg_match('/^ep-[a-z0-9-]+$/', $endpointId) === 1) {
+            $dsn .= ';options=endpoint=' . $endpointId;
+        }
+    }
     try {
         return new PDO($dsn, rawurldecode((string)($parts['user'] ?? '')), rawurldecode((string)($parts['pass'] ?? '')), [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
@@ -21,8 +31,12 @@ function ironshield_database_connection(): PDO
             PDO::ATTR_EMULATE_PREPARES => false,
         ]);
     } catch (Throwable $error) {
-        error_log('Iron Shield database connection failed: ' . get_class($error));
-        throw new RuntimeException('Der dauerhafte Datenbankspeicher ist gerade nicht verfügbar.');
+        $sqlState = $error instanceof PDOException && isset($error->errorInfo[0])
+            ? (string)$error->errorInfo[0]
+            : (string)$error->getCode();
+        error_log('Iron Shield database connection failed: ' . get_class($error) . ($sqlState !== '' ? ' SQLSTATE ' . $sqlState : ''));
+        $diagnostic = $sqlState !== '' ? ' (SQLSTATE ' . $sqlState . ')' : '';
+        throw new RuntimeException('Der dauerhafte Datenbankspeicher ist gerade nicht verfügbar.' . $diagnostic, 0, $error);
     }
 }
 
