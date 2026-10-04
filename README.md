@@ -79,3 +79,7 @@ Für `node2.novium.world:22039` muss das Start-Image PHP CLI enthalten. Wenn der
 Für Discord OAuth2 muss `DISCORD_REDIRECT_URI` auf die vollständige Callback-Adresse dieser Website zeigen und im Developer Portal exakt gleich unter **OAuth2 → Redirects** eingetragen sein, inklusive Schema, Port und Pfad `/api/index.php?route=callback`. Verwende nach Möglichkeit die HTTPS-Adresse, falls Novium sie für diesen Port bereitstellt. Die Adresse ohne `http://` oder `https://` allein ist keine vollständige Callback-URL.
 
 Für die veröffentlichte Website `https://ironshield.novium.link/` lautet der konkrete Wert `https://ironshield.novium.link/api/index.php?route=callback`. Trage ihn sowohl im Hosting-Panel als `DISCORD_REDIRECT_URI` als auch in Discord unter **OAuth2 → Redirects** ein. Die Live-Seite hat zuvor noch die lokale `localhost`-Adresse an Discord gesendet.
+
+## Umzug auf Vercel
+
+Die Dateispeicherung aus dem bisherigen Hosting gilt nicht für Vercel. Dort müssen Sitzungen, Teamkonten, Tickets, Dashboard-Einstellungen und Anhänge über `DATABASE_URL` in PostgreSQL liegen. Die private Quelldatensicherung unter `.ironshield-private/` wird nicht mit deployed (sie steht absichtlich in `.vercelignore`); importiere sie nach dem Einrichten der Datenbank einmalig mit `php scripts/import-private-data.php`. Die vollständige Reihenfolge, erforderlichen Umgebungsvariablen und Discord-Callback-URL stehen in [`VERCEL_DEPLOY.md`](VERCEL_DEPLOY.md). Ohne Datenbank und Vercel-Projektzugriff ist die Migration vorbereitet, aber noch nicht live.
