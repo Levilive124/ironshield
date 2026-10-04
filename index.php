@@ -115,6 +115,9 @@ function config(string $key, string $default = ''): string
     return $value === false ? $default : $value;
 }
 
+$clientId = trim(config('DISCORD_CLIENT_ID'));
+$botClientId = trim(config('DISCORD_BOT_CLIENT_ID')) ?: $clientId;
+
 function discord_redirect_uri(): string
 {
     $host = strtolower((string)(parse_url('https://' . ($_SERVER['HTTP_HOST'] ?? ''), PHP_URL_HOST) ?: ''));
@@ -817,7 +820,7 @@ if (in_array($route, ['team_login', 'team', 'team_logout', 'team_create_user', '
 if ($route === 'login' || $route === 'dashboard_login') {
     $_SESSION['oauth_next'] = $route === 'dashboard_login' ? 'dashboard' : 'support';
     $redirectUri = discord_redirect_uri();
-    if (config('DISCORD_CLIENT_SECRET') === '' || $redirectUri === '') failure_page('Discord-Login noch nicht eingerichtet. Ergänze DISCORD_CLIENT_SECRET und DISCORD_REDIRECT_URI in der Hosting-Konfiguration.', 503);
+    if ($clientId === '' || config('DISCORD_CLIENT_SECRET') === '' || $redirectUri === '') failure_page('Discord-Login noch nicht eingerichtet. Ergänze DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET und DISCORD_REDIRECT_URI in der Hosting-Konfiguration.', 503);
     $state = bin2hex(random_bytes(24));
     $stateCookie = oauth_state_cookie_name($state);
     foreach (($_SESSION['oauth_states'] ?? []) as $oldCookie => $oldEntry) {
@@ -842,7 +845,7 @@ if ($route === 'callback') {
     if (isset($_GET['error'])) failure_page('Die Discord-Anmeldung wurde abgebrochen.', 400);
     $code = (string)($_GET['code'] ?? '');
     $redirectUri = discord_redirect_uri();
-    if ($code === '' || config('DISCORD_CLIENT_SECRET') === '' || $redirectUri === '') failure_page('Die OAuth-Konfiguration ist unvollständig.', 503);
+    if ($code === '' || $clientId === '' || config('DISCORD_CLIENT_SECRET') === '' || $redirectUri === '') failure_page('Die OAuth-Konfiguration ist unvollständig. Prüfe DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET und DISCORD_REDIRECT_URI.', 503);
     try {
         $tokens = discord_request('/oauth2/token', '', 'POST', ['client_id' => $clientId, 'client_secret' => config('DISCORD_CLIENT_SECRET'), 'grant_type' => 'authorization_code', 'code' => $code, 'redirect_uri' => $redirectUri]);
         if (empty($tokens['access_token'])) failure_page('Discord konnte den Login-Code nicht bestätigen. Bitte prüfe Client-Secret und Redirect-URL.', 502);
