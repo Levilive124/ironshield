@@ -43,9 +43,9 @@
     connectionDetail.textContent = lastSeen ? `Letzter Abgleich vor ${Math.max(0, Math.floor(Date.now() / 1000) - lastSeen)} Sekunden` : 'Noch keine Verbindung gemeldet';
   }
   async function requestState() {
-    const response = await fetch(`/index.php?route=dashboard_data${guildId ? `&guild=${encodeURIComponent(guildId)}` : ''}`, {credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
+    const response = await fetch(`/api/index.php?route=dashboard_data${guildId ? `&guild=${encodeURIComponent(guildId)}` : ''}`, {credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
     const data = await readApiJson(response);
-    if (response.status === 401) { location.assign('/index.php?route=dashboard_login'); return null; }
+    if (response.status === 401) { location.assign('/api/index.php?route=dashboard_login'); return null; }
     if (!response.ok) throw new Error(data.error || 'Dashboard-Daten konnten nicht geladen werden.');
     return data;
   }
@@ -54,7 +54,7 @@
     syncing = true;
     try {
       const query = guildId ? `&guild=${encodeURIComponent(guildId)}` : '';
-      const response = await fetch(`/index.php?route=dashboard_refresh${query}`, {credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
+      const response = await fetch(`/api/index.php?route=dashboard_refresh${query}`, {credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
       const state = await readApiJson(response);
       if (!response.ok) throw new Error(state.error || 'Bot-Status kann gerade nicht aktualisiert werden.');
       if (state.connection_error || state.error) showMessage(state.connection_error || state.error, true);
@@ -132,7 +132,7 @@
       nav.append(navLink,node('p','dashboard-manage-nav-note','Weitere Funktionen werden hier ergänzt.'));
       const body = node('div','dashboard-manage-content'); body.id='ticketsystem';
       body.append(node('p','','Stelle Ticketing direkt hier ein. Kanäle und Rollen werden aus Discord geladen; deine Änderungen werden mit dem Bot synchronisiert.'));
-      const form = node('form','portal-card ticket-editor'); form.id='ticket-settings-form'; form.method='post'; form.action='/index.php?route=dashboard_tickets_save';
+      const form = node('form','portal-card ticket-editor'); form.id='ticket-settings-form'; form.method='post'; form.action='/api/index.php?route=dashboard_tickets_save';
       form.addEventListener('input',()=>{form.dataset.dirty='1';});
       form.addEventListener('change',()=>{form.dataset.dirty='1';});
       const csrf = node('input'); csrf.type='hidden'; csrf.name='csrf'; csrf.value=data.csrf;
@@ -165,7 +165,7 @@
       const list=node('div','dashboard-bot-module-list');
       for (const module of category.modules || []) {
         if (!/^[a-z0-9_-]{1,80}$/.test(String(module.key || ''))) continue;
-        const form=node('form','dashboard-bot-module-row'); form.method='post'; form.action='/index.php?route=dashboard_module_save';
+        const form=node('form','dashboard-bot-module-row'); form.method='post'; form.action='/api/index.php?route=dashboard_module_save';
         const addHidden=(name,value)=>{const input=node('input');input.type='hidden';input.name=name;input.value=value;form.append(input);};
         addHidden('csrf',data.csrf);addHidden('guild_id',data.selected.id);addHidden('module_key',module.key);addHidden('enabled','0');
         const labelNode=node('label','dashboard-bot-module-copy'); const text=node('span');
@@ -198,8 +198,8 @@
       render(data);
       if (!data.bot_token_verified || data.guilds.some(item=>!item.checked) || Date.now()/1000-Number(data.last_seen||0)>45) refreshBot();
     } catch(error) {
-      if (error.message==='login_required') location.assign('/index.php?route=dashboard_login');
-      else { showMessage(error.message,true); content.replaceChildren(node('p','dashboard-message is-error',error.message)); }
+      if (error.message==='login_required') location.assign('/api/index.php?route=dashboard_login');
+      else { showMessage(error.message,true); content.replaceChildren(); }
     }
   }
   setInterval(() => { if (lastSeen) connectionDetail.textContent=`Letzter Abgleich vor ${Math.max(0,Math.floor(Date.now()/1000)-lastSeen)} Sekunden`; },1000);

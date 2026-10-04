@@ -21,14 +21,6 @@
   ],
   "rewrites": [
     {
-      "source": "/index.php",
-      "destination": "/api/index.php"
-    },
-    {
-      "source": "/includes/recht.php",
-      "destination": "/api/recht.php"
-    },
-    {
       "source": "/includes/:path*",
       "destination": "/api/not-found.php"
     },
@@ -39,16 +31,6 @@
     {
       "source": "/scripts/:path*",
       "destination": "/api/not-found.php"
-    },
-    {
-      "source": "/",
-      "has": [
-        {
-          "type": "query",
-          "key": "route"
-        }
-      ],
-      "destination": "/api/index.php"
     }
   ]
 }

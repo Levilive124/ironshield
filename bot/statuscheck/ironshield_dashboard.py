@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import ipaddress
 import json
 import os
 import re
@@ -236,15 +237,28 @@ class IronShieldDashboardCog(commands.Cog):
     async def _bridge_request(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         configured_url = os.getenv("PUBLIC_SITE_URL", "https://ironshield.novium.link").strip()
         parsed_url = urlsplit(configured_url)
+        try:
+            port = parsed_url.port
+        except ValueError as error:
+            raise RuntimeError("PUBLIC_SITE_URL enthält einen ungültigen Port.") from error
+        hostname = parsed_url.hostname or ""
+        try:
+            ipaddress.ip_address(hostname)
+            is_ip_address = True
+        except ValueError:
+            is_ip_address = False
         if (parsed_url.scheme.lower() != "https"
-                or (parsed_url.hostname or "").lower() != "ironshield.novium.link"
-                or parsed_url.port not in (None, 443)
+                or not hostname
+                or is_ip_address
+                or parsed_url.username is not None
+                or parsed_url.password is not None
+                or port not in (None, 443)
                 or parsed_url.path not in ("", "/")
                 or parsed_url.query
                 or parsed_url.fragment):
-            raise RuntimeError("PUBLIC_SITE_URL muss exakt https://ironshield.novium.link lauten (ohne IP, Unterdomain, Port oder Pfad).")
-        # Keep the URL hostname literal so aiohttp sends the expected TLS SNI.
-        base_url = "https://ironshield.novium.link"
+            raise RuntimeError("PUBLIC_SITE_URL muss eine HTTPS-Domain ohne IP, Zugangsdaten, abweichenden Port, Pfad oder Query sein.")
+        # Keep the configured HTTPS hostname intact so aiohttp sends it as TLS SNI.
+        base_url = f"https://{parsed_url.netloc}"
         # This is a dedicated website-bridge secret, never a Discord bot token.
         # Migrate existing deployments that already share a dedicated random
         # BOT_WEBHOOK_SECRET; neither variable may contain the Discord token.
@@ -256,9 +270,9 @@ class IronShieldDashboardCog(commands.Cog):
         if self._http_session is None or self._http_session.closed:
             timeout = aiohttp.ClientTimeout(total=12, connect=5, sock_read=8)
             # Use aiohttp's default connector and verified SSL context; this keeps
-            # hostname/SNI handling on its standard path for the Novium endpoint.
+            # hostname/SNI handling on its standard path for the configured host.
             self._http_session = aiohttp.ClientSession(timeout=timeout)
-        url = f"{base_url}/?route=dashboard_bridge&action={action}"
+        url = f"{base_url}/api/index.php?route=dashboard_bridge&action={action}"
         async with self._http_session.post(url, json=payload, headers={"X-IronShield-Dashboard-Secret": bridge_secret}) as response:
             try:
                 result = await response.json(content_type=None)
@@ -353,7 +367,7 @@ class IronShieldDashboardCog(commands.Cog):
             except Exception as error:
                 self.sync_connected = False
                 if not self._sync_error_logged:
-                    print(f"[ironshield-dashboard] Website-Synchronisierung fehlgeschlagen (Ziel https://ironshield.novium.link/?route=dashboard_bridge&action=poll): {error}", flush=True)
+                    print(f"[ironshield-dashboard] Website-Synchronisierung fehlgeschlagen (API /api/index.php?route=dashboard_bridge&action=poll): {error}", flush=True)
                     traceback.print_exc()
                     self._sync_error_logged = True
                 await asyncio.sleep(30)

@@ -379,7 +379,7 @@ function team_ticket_category(string $category): string
 function team_redirect(string $route, string $message = ''): never
 {
     $staticPages = ['team_login' => '/team-login.html', 'team' => '/team.html', 'support' => '/support.html', 'ticket' => '/ticket.html'];
-    $url = $staticPages[$route] ?? ('/index.php?route=' . rawurlencode($route));
+    $url = $staticPages[$route] ?? ('/api/index.php?route=' . rawurlencode($route));
     if ($message !== '') $url .= (str_contains($url, '?') ? '&' : '?') . 'message=' . rawurlencode($message);
     header('Location: ' . $url, true, 303);
     exit;

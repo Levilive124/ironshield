@@ -16,7 +16,7 @@
   };
   const anchor = (href, className, text) => { const item=el('a',className,text);item.href=href;return item; };
   const hidden = (form,name,value) => { const input=el('input');input.type='hidden';input.name=name;input.value=value;form.append(input);return input; };
-  const form = (className,action) => {const item=el('form',className);item.method='post';item.action=`/index.php?route=${action}`;return item;};
+  const form = (className,action) => {const item=el('form',className);item.method='post';item.action=`/api/index.php?route=${action}`;return item;};
   const label = (title,control,extra='') => {const item=el('label','portal-label');item.append(document.createTextNode(title));if(extra)item.append(el('span','optional-label',extra));item.append(control);return item;};
   const input = (name,placeholder='',type='text',maxLength) => {const item=el('input','portal-input');item.name=name;item.type=type;item.placeholder=placeholder;if(maxLength)item.maxLength=maxLength;if(type==='text'||type==='password')item.required=true;return item;};
   const textarea = (name,placeholder,maxLength,compact=false) => {const item=el('textarea',`portal-textarea${compact?' compact-textarea':''}`);item.name=name;item.placeholder=placeholder;item.maxLength=maxLength;item.required=!compact;return item;};
@@ -28,7 +28,7 @@
     const wrap=el('div','ticket-attachments');
     for(const item of attachments||[]) {
       if(!/^[a-f0-9]{40}$/.test(String(item.id||'')))continue;
-      const url=`/index.php?route=ticket_attachment&id=${encodeURIComponent(ticketId)}&file=${encodeURIComponent(item.id)}`;
+      const url=`/api/index.php?route=ticket_attachment&id=${encodeURIComponent(ticketId)}&file=${encodeURIComponent(item.id)}`;
       const name=String(item.name||'Anhang');
       if(String(item.mime||'').startsWith('image/')) {const a=anchor(url,'ticket-attachment-image');a.setAttribute('aria-label',name);const img=el('img');img.src=url;img.alt=name;img.loading='lazy';a.append(img);wrap.append(a);}
       else if(String(item.mime||'').startsWith('video/')) {const video=el('video','ticket-attachment-video');video.controls=true;video.preload='none';const source=el('source');source.src=url;source.type=item.mime;video.append(source);wrap.append(video);}
@@ -44,7 +44,7 @@
     return article;
   }
   async function load() {
-    const url=`/index.php?route=team_data&view=${encodeURIComponent(view)}${view==='ticket'?'&id='+encodeURIComponent(ticketId):''}`;
+    const url=`/api/index.php?route=team_data&view=${encodeURIComponent(view)}${view==='ticket'?'&id='+encodeURIComponent(ticketId):''}`;
     const response=await fetch(url,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
     const data=await response.json();
     if(!response.ok) {const error=new Error(data.error||'Die Seite konnte nicht geladen werden.');error.status=response.status;throw error;}
@@ -68,7 +68,7 @@
   function renderSupport(data) {
     const staff=Boolean(data.staff);
     root.replaceChildren(el('span','portal-kicker','OFFIZIELLE SUPPORT-SEITE · IRON SHIELD'),el('h1','portal-title',staff?'Support-Postfach.':'Deine Support-Tickets.'),el('p','portal-subtitle',staff?'Hier siehst und bearbeitest du die Tickets der Community.':'Öffne ein Ticket und kommuniziere direkt mit unserem Team.'));
-    if(!staff&&!data.discord_user){root.append(el('section','portal-feature', 'Melde dich mit Discord an, um ein Ticket zu öffnen und mit unserem Team zu kommunizieren.'));root.lastChild.append(anchor('/index.php?route=login','portal-button','Mit Discord anmelden und Ticket öffnen ↗'));return;}
+    if(!staff&&!data.discord_user){root.append(el('section','portal-feature', 'Melde dich mit Discord an, um ein Ticket zu öffnen und mit unserem Team zu kommunizieren.'));root.lastChild.append(anchor('/api/index.php?route=login','portal-button','Mit Discord anmelden und Ticket öffnen ↗'));return;}
     if(!staff) {
       const f=form('portal-card ticket-form','ticket_create');f.enctype='multipart/form-data';hidden(f,'csrf',data.csrf);
       const heading=el('div','ticket-form-heading');const headingCopy=el('div');headingCopy.append(el('span','portal-kicker','NEUES ANLIEGEN'),el('h2','','Wie können wir helfen?'));heading.append(headingCopy,el('span','ticket-step','01 / 01'));
@@ -103,7 +103,7 @@
     }
   }
   function renderTeam(data) {
-    const navForm=document.querySelector('.portal-head form[action="/index.php?route=team_logout"]');if(navForm)navForm.querySelector('[name=csrf]').value=data.csrf;
+    const navForm=document.querySelector('.portal-head form[action="/api/index.php?route=team_logout"]');if(navForm)navForm.querySelector('[name=csrf]').value=data.csrf;
     root.replaceChildren(el('h1','portal-title','Teamverwaltung.'),el('p','portal-subtitle',`Willkommen, ${data.staff.displayName||data.staff.username}${data.is_admin?' · Owner-Verwaltung':' · Teammitglied'}`));
     const actions=el('div','portal-actions');actions.append(anchor('/support.html','portal-button','Zum Support-Postfach'));root.append(actions);
     if(data.can_manage_users){
@@ -150,14 +150,14 @@
   async function pollMessages(id,box) {
     if(polling||document.hidden)return;polling=true;
     try {
-      const response=await fetch(`/index.php?route=ticket_poll&id=${encodeURIComponent(id)}&after=${messageCount}`,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
+      const response=await fetch(`/api/index.php?route=ticket_poll&id=${encodeURIComponent(id)}&after=${messageCount}`,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
       if(!response.ok)return;const data=await response.json();if(data.status!=='open'){location.reload();return;}
       for(const item of data.messages||[]){box.append(messageNode(id,item));messageCount++;box.dataset.messageCount=String(messageCount);}
     } catch {} finally {polling=false;}
   }
   load().catch(error=>{
     root.replaceChildren();
-    if(error.status===401&&view==='support') {root.append(el('span','portal-kicker','OFFIZIELLE SUPPORT-SEITE · IRON SHIELD'),el('h1','portal-title','Iron Shield Support.'),el('p','portal-subtitle','Melde dich mit Discord an, um ein Ticket zu öffnen und direkt mit dem Team zu kommunizieren.'),anchor('/index.php?route=login','portal-button','Mit Discord anmelden und Ticket öffnen ↗'));}
+    if(error.status===401&&view==='support') {root.append(el('span','portal-kicker','OFFIZIELLE SUPPORT-SEITE · IRON SHIELD'),el('h1','portal-title','Iron Shield Support.'),el('p','portal-subtitle','Melde dich mit Discord an, um ein Ticket zu öffnen und direkt mit dem Team zu kommunizieren.'),anchor('/api/index.php?route=login','portal-button','Mit Discord anmelden und Ticket öffnen ↗'));}
     else if(error.status===401&&view==='team') {location.replace('/team-login.html');}
     else {root.append(el('p','portal-flash is-error',error.message||'Die Seite konnte nicht geladen werden.'));}
   });

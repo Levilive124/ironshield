@@ -13,7 +13,7 @@
   <main class="section-wrap dashboard-section">
     <header class="dashboard-heading">
       <div><div class="eyebrow dashboard-eyebrow"><img src="/assets/ironshield-logo.svg" alt="">IRON SHIELD · DASHBOARD</div><h1>Deine <span>Server.</span></h1><p>Bot-Status und Einstellungen für deine Discord-Server.</p></div>
-      <div class="user-chip"><span id="dashboard-user"></span><form method="post" action="/index.php?route=logout"><input type="hidden" name="csrf" value=""><button class="logout-button" type="submit">Abmelden</button></form></div>
+      <div class="user-chip"><span id="dashboard-user"></span><form method="post" action="/api/index.php?route=logout"><input type="hidden" name="csrf" value=""><button class="logout-button" type="submit">Abmelden</button></form></div>
     </header>
     <div class="dashboard-connection is-offline" id="dashboard-connection" role="status"><span class="dashboard-connection-dot"></span><div><strong id="dashboard-connection-title">Dashboard wird geladen</strong><small id="dashboard-connection-detail">Bitte einen Moment warten.</small></div></div>
     <p class="dashboard-message" id="dashboard-message" hidden></p>

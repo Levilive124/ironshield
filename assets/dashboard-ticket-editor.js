@@ -314,7 +314,7 @@
   });
 
   render(); makeChoiceFields();
-  fetch('/index.php?route=dashboard_options&guild='+encodeURIComponent(guildId), {credentials:'same-origin',headers:{Accept:'application/json'},cache:'no-store'})
+  fetch('/api/index.php?route=dashboard_options&guild='+encodeURIComponent(guildId), {credentials:'same-origin',headers:{Accept:'application/json'},cache:'no-store'})
     .then(response=>response.ok?response.json():Promise.reject(new Error('Discord-Auswahl nicht verfügbar')))
     .then(data=>{options=data;fillDiscordSelects();if(status)status.textContent='Discord-Kanäle und Rollen geladen';})
     .catch(()=>{if(status)status.textContent='Discord-Auswahl nicht geladen. Bereits gespeicherte Werte bleiben erhalten.';});
