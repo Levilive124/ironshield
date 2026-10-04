@@ -19,6 +19,10 @@ load_env_file(__DIR__ . '/.env');
 define('IRONSHIELD_APP', true);
 require_once __DIR__ . '/bot/discord.php';
 require_once __DIR__ . '/includes/storage.php';
+$route = (string)($_GET['route'] ?? '');
+if (strtolower((string)(getenv('VERCEL') ?: '')) === '1' && !ironshield_storage_enabled() && $route !== '') {
+    json_response(503, ['error' => 'DATABASE_URL ist auf Vercel erforderlich, damit Sitzungen, Tickets und Dashboard-Einstellungen dauerhaft gespeichert werden.']);
+}
 if (PHP_SAPI === 'cli-server' && !defined('IRONSHIELD_API_ENTRY')) {
     $requestPath = rawurldecode((string)(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/'));
     if (preg_match('#(?:^|/)\.(?!well-known(?:/|$))#', $requestPath) === 1) {
@@ -69,7 +73,7 @@ function config(string $key, string $default = ''): string
 function discord_redirect_uri(): string
 {
     $host = strtolower((string)(parse_url('https://' . ($_SERVER['HTTP_HOST'] ?? ''), PHP_URL_HOST) ?: ''));
-    if ($host === 'ironshield.novium.link') return 'https://ironshield.novium.link/index.php?route=callback';
+    if ($host === 'ironshield.novium.link') return 'https://ironshield.novium.link/api/index.php?route=callback';
     if (in_array($host, ['localhost', '127.0.0.1'], true)) return 'http://' . $host . ':8000/api/index.php?route=callback';
     return config('DISCORD_REDIRECT_URI');
 }
@@ -197,10 +201,6 @@ function dashboard_bot_webapi_request(string $command, array $args, string $acto
     return $response['data'];
 }
 
-$route = (string)($_GET['route'] ?? '');
-if (strtolower((string)(getenv('VERCEL') ?: '')) === '1' && !ironshield_storage_enabled() && $route !== '') {
-    json_response(503, ['error' => 'DATABASE_URL ist auf Vercel erforderlich, damit Sitzungen, Tickets und Dashboard-Einstellungen dauerhaft gespeichert werden.']);
-}
 $clientId = config('DISCORD_CLIENT_ID', '1479835689284669461');
 $botClientId = trim(config('DISCORD_BOT_CLIENT_ID')) ?: $clientId;
 

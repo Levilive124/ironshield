@@ -21,6 +21,10 @@
   ],
   "rewrites": [
     {
+      "source": "/index.php",
+      "destination": "/api/not-found.php"
+    },
+    {
       "source": "/includes/:path*",
       "destination": "/api/not-found.php"
     },

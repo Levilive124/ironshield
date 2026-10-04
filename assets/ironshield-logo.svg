@@ -1,18 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
   <title id="title">Iron Shield</title>
   <defs>
-    <linearGradient id="shield" x1="36" y1="20" x2="220" y2="238" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#c7f59b"/>
-      <stop offset="1" stop-color="#5caa4d"/>
-    </linearGradient>
-    <linearGradient id="steel" x1="80" y1="61" x2="178" y2="195" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#f4f8f5"/>
-      <stop offset="1" stop-color="#aebcb5"/>
+    <filter id="glow" x="-45%" y="-35%" width="190%" height="180%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="1 0 0 0 0.82 0 1 0 0 0.86 0 0 1 0 0.9 0 0 0 0.8 0" result="halo"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <linearGradient id="metal" x1="52" y1="42" x2="190" y2="222" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff"/>
+      <stop offset=".55" stop-color="#f5f6f5"/>
+      <stop offset="1" stop-color="#d8dddc"/>
     </linearGradient>
   </defs>
-  <path d="M128 10 231 48v70c0 65-42 105-103 128C67 223 25 183 25 118V48L128 10Z" fill="#101710" stroke="url(#shield)" stroke-width="12" stroke-linejoin="round"/>
-  <path d="M128 31 210 61v57c0 51-31 84-82 106-51-22-82-55-82-106V61l82-30Z" fill="none" stroke="#c7f59b" stroke-opacity=".22" stroke-width="3"/>
-  <path d="M91 76h26v101H91z" fill="url(#steel)"/>
-  <path d="M165 78h-40c-16 0-27 10-27 25 0 14 8 22 25 27l18 5c7 2 10 5 10 9 0 5-4 8-11 8h-39v25h43c20 0 33-11 33-29 0-15-9-24-27-29l-17-5c-7-2-10-4-10-8 0-4 3-6 9-6h33V78Z" fill="url(#steel)"/>
-  <path d="M42 54 128 22l86 32" fill="none" stroke="#fff" stroke-opacity=".13" stroke-width="4" stroke-linecap="round"/>
+  <g fill="url(#metal)" stroke="#101214" stroke-width="1.5" stroke-linejoin="miter" filter="url(#glow)">
+    <path d="M29 45h71v175l-41-36V78L29 45Z"/>
+    <path d="M132 45h105l-19 32h-68v14l63 24v57l-62 52-19-17v-95l38 14v32l18-15v-8l-56-21V64l19-19Z"/>
+  </g>
 </svg>
