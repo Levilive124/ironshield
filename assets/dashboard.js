@@ -29,7 +29,15 @@
   };
   async function readApiJson(response) {
     if (!(response.headers.get('content-type') || '').toLowerCase().includes('application/json')) {
-      throw new Error(`Dashboard-API lieferte kein JSON (HTTP ${response.status}). Bitte API-Endpunkt und Hosting-Routing prüfen.`);
+      const contentType = response.headers.get('content-type') || 'unbekannt';
+      const finalUrl = new URL(response.url).pathname;
+      let detail = '';
+      try {
+        const body = await response.clone().text();
+        const title = body.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]?.replace(/\s+/g, ' ').trim();
+        if (title) detail = ` Antwortseite: ${title.slice(0, 100)}.`;
+      } catch { /* Keep the routing hint even when the body cannot be read. */ }
+      throw new Error(`Dashboard-API lieferte kein JSON (HTTP ${response.status}, ${contentType}, ${finalUrl}). Vercel liefert hier eine Webseite statt der PHP-API.${detail}`);
     }
     try { return await response.json(); }
     catch { throw new Error(`Dashboard-API lieferte ungültiges JSON (HTTP ${response.status}).`); }

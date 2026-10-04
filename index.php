@@ -68,7 +68,11 @@ try {
     error_log('Iron Shield session startup failed: ' . get_class($error));
     $cause = $error;
     while ($cause->getPrevious() instanceof Throwable) $cause = $cause->getPrevious();
-    $sqlState = $cause instanceof PDOException && isset($cause->errorInfo[0]) ? (string)$cause->errorInfo[0] : '';
+    $sqlState = '';
+    if ($cause instanceof PDOException) {
+        $sqlState = isset($cause->errorInfo[0]) ? (string)$cause->errorInfo[0] : (string)$cause->getCode();
+        if (preg_match('/^[A-Z0-9]{5}$/i', $sqlState) !== 1) $sqlState = '';
+    }
     $errorMessage = 'Die Datenbank ist konfiguriert, aber derzeit nicht erreichbar.';
     if ($sqlState !== '') $errorMessage .= ' (SQLSTATE ' . $sqlState . ')';
     json_response(503, ['error' => $errorMessage]);

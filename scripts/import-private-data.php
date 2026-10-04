@@ -146,6 +146,7 @@ try {
         if (is_array($item) && preg_match('/^[a-f0-9]{40}$/', (string)($item['id'] ?? ''))) $attachmentMeta[(string)$item['id']] = $item;
     }
     $mimeByExtension = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp', 'mp4' => 'video/mp4', 'webm' => 'video/webm', 'mov' => 'video/quicktime'];
+    $importedAttachments = 0;
     if (is_dir($attachmentDir)) {
         $saveAttachment = $pdo->prepare('INSERT INTO ironshield_attachments (attachment_id, mime, filename, data) VALUES (:id, :mime, :filename, :data) ON CONFLICT (attachment_id) DO NOTHING');
         foreach (new DirectoryIterator($attachmentDir) as $file) {
@@ -163,6 +164,7 @@ try {
             $saveAttachment->bindValue(':filename', (string)($meta['name'] ?? 'Anhang'));
             $saveAttachment->bindValue(':data', $bytes, PDO::PARAM_LOB);
             $saveAttachment->execute();
+            if ($saveAttachment->rowCount() > 0) $importedAttachments++;
         }
     }
 
@@ -179,7 +181,21 @@ try {
         }
     }
     $pdo->commit();
-    fwrite(STDOUT, "Privater Datenstand wurde importiert. Die Quelldateien wurden nicht verändert.\n");
+    $countRecords = static fn(mixed $records): int => is_array($records) ? count(array_filter($records, 'is_array')) : 0;
+    $summary = [
+        'source' => [
+            'team_accounts' => $countRecords($legacy['users'] ?? null),
+            'tickets' => $countRecords($legacy['tickets'] ?? null),
+            'announcements' => $countRecords($legacy['announcements'] ?? null),
+        ],
+        'database_after_import' => [
+            'team_accounts' => $countRecords($current['users'] ?? null),
+            'tickets' => $countRecords($current['tickets'] ?? null),
+            'announcements' => $countRecords($current['announcements'] ?? null),
+            'new_attachments' => $importedAttachments,
+        ],
+    ];
+    fwrite(STDOUT, "Privater Datenstand wurde importiert. Quelle blieb unverändert. Mengenübersicht (keine Inhalte): " . json_encode($summary, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n");
 } catch (Throwable $error) {
     if ($pdo->inTransaction()) $pdo->rollBack();
     fwrite(STDERR, "Import fehlgeschlagen; Datenbanktransaktion wurde zurückgerollt.\n");
