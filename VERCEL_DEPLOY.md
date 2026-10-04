@@ -4,6 +4,8 @@ Alle sichtbaren Seiten liegen als statische HTML-Dateien vor: Startseite, Dashbo
 
 ## Vor einem Live-Umzug zwingend erledigen
 
+Vor dem Cutover auch `datenschutz.html` aktualisieren: Die vorhandenen Abschnitte nennen noch Novium und beschreiben teils eine SQL-freie Speicherung sowie eine Ticket-Veröffentlichung in Discord. Beides entspricht dem Vercel-Ziel beziehungsweise dem aktuellen Ticket-Code nicht. Trage erst nach Auswahl des tatsächlichen Vercel-/Datenbank-Setups die bestätigten Anbieter-, Speicherort-, Protokoll- und Aufbewahrungsinformationen ein; beschreibe den aktuellen Ticketablauf korrekt. Bis diese Angaben geprüft sind, die Datenschutzseite nicht als für den neuen Host aktualisiert betrachten.
+
 Für Vercel werden Teamkonten, Tickets, Ankündigungen, Sitzungen, Dashboard-Relay-Zustand und Ticket-Anhänge in PostgreSQL gespeichert. Der Adapter legt seine Tabellen beim ersten Verbindungsaufbau an. Ohne `DATABASE_URL` lehnt die Anwendung dynamische Vercel-Routen mit HTTP 503 ab, statt Daten in flüchtige Dateien zu schreiben. Vor dem Live-Schalten muss der bestehende `.ironshield-private`-Inhalt einmalig in die Datenbank migriert werden. Die konfigurierte `vercel-php@0.9.0`-Runtime verwendet PHP 8.5 und enthält `PDO_PGSQL` (`pdo_pgsql`); für den Import auf deinem PC muss deine lokale PHP-Installation dieselbe Erweiterung aktivieren.
 
 Die private Datensicherung aus dem bisherigen Hosting muss lokal in `.ironshield-private/` liegen. Eine `DATABASE_URL` kann für den Einmalimport in die ignorierte lokale `.env` geschrieben werden; der Import liest nur diesen Schlüssel und gibt den Wert nicht aus. Danach mit installiertem PHP einmalig im Projektordner ausführen:
@@ -13,6 +15,8 @@ php scripts/import-private-data.php
 ```
 
 Das Script importiert Konten, Tickets, Ankündigungen, Dashboard-Zustand und passende Ticket-Anhänge in einer Transaktion. Der Import-Fingerabdruck berücksichtigt Store, Dashboard-Zustand und Anhänge; unveränderte Wiederholungen werden übersprungen. Bei einem neueren Ticketstand werden neue Nachrichten ergänzt, bestehende Nachrichten bleiben erhalten. Das Script gibt weder private Inhalte noch Zugangsdaten aus und verändert die Quelldateien nicht.
+
+Bereits aktive PHP-Sitzungen des bisherigen Hosts werden nicht mitgenommen; die Sitzungen lagen außerhalb dieser privaten Datensicherung. Nach dem Umzug müssen sich Nutzer erneut über Discord anmelden und Teammitglieder erneut mit ihrem bisherigen Teamkonto anmelden. Teamkonten einschließlich Passwort-Hashes und die gespeicherten Tickets werden durch den Import übernommen.
 
 ## Hosting-Werte nach Einrichtung des Speichers
 
@@ -37,4 +41,24 @@ Die Website-Einladelinks fordern keine Berechtigung zum Erstellen von Kanälen o
 
 ## Deployment
 
-Die Vercel-PHP-Ausführung verwendet `vercel-php@0.9.0` mit Node.js 22. Die ältere Runtime `0.5.2` basiert auf Node.js 14 und wird von Vercel nicht mehr akzeptiert. Direkte Aufrufe der alten `/index.php`-Seitenroute werden auf eine 404-API-Antwort umgeleitet; die Datei bleibt nur als serverseitige gemeinsame API-Logik vorhanden. Die Bereitstellung benötigt ein verbundenes Git-Repository oder eine Vercel-CLI-Anmeldung. Beides ist in diesem Arbeitsordner derzeit nicht eingerichtet; außerdem muss vor Livebetrieb PostgreSQL bereitgestellt, befüllt und in Vercel konfiguriert werden. Deshalb ist diese lokale Umstellung noch nicht live veröffentlicht.
+Die Vercel-PHP-Ausführung verwendet `vercel-php@0.9.0` mit Node.js 22. Die ältere Runtime `0.5.2` basiert auf Node.js 14 und wird von Vercel nicht mehr akzeptiert. Direkte Aufrufe der alten `/index.php`-Seitenroute werden auf eine 404-API-Antwort umgeleitet; die Datei bleibt nur als serverseitige gemeinsame API-Logik vorhanden.
+
+### GitHub-Repository vorbereiten
+
+Wenn Vercel meldet, dass der angegebene Branch oder Commit fehlt, ist das GitHub-Repository meist noch leer oder der ausgewählte Branch existiert darin nicht. Erstelle in GitHub zuerst ein **leeres** Repository (ohne README, Lizenz oder `.gitignore`). Öffne dann PowerShell im Projektordner und veröffentliche den ersten Commit:
+
+```powershell
+git init -b main
+git config user.name "<DEIN NAME>"
+git config user.email "<DEINE GITHUB-E-MAIL>"
+git add .
+git commit -m "Prepare Iron Shield for Vercel"
+git remote add origin https://github.com/<BENUTZERNAME>/<REPOSITORY>.git
+git push -u origin main
+```
+
+Ersetze die Platzhalter durch deine Angaben. `git config` setzt den Commit-Namen und die E-Mail nur für dieses Repository; du kannst in GitHub unter den E-Mail-Einstellungen eine private `noreply`-Adresse verwenden. `.gitignore` schließt `.env` und `.ironshield-private/` aus; prüfe vor dem Commit und Push trotzdem mit `git status`, dass dort keine Zugangsdaten oder privaten Sicherungsdateien zur Veröffentlichung vorgemerkt sind. Wähle beim Vercel-Import anschließend genau dieses Repository und den Branch `main`; als Root Directory den Projektordner verwenden, Framework Preset **Other**, keinen eigenen Build-Befehl und kein separates Output-Verzeichnis setzen.
+
+### Erforderliche externe Einrichtung
+
+Die Bereitstellung benötigt außerdem ein Vercel-Projekt, eine Vercel-Anmeldung und eine PostgreSQL-Datenbank. Importiere die vorhandene private Datensicherung wie oben beschrieben, setze alle Hosting-Variablen in Vercel und deploye danach neu. Ohne GitHub-Repository, Vercel-Zugang und konfigurierte `DATABASE_URL` ist die lokale Umstellung vorbereitet, aber noch nicht live veröffentlicht.
