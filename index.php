@@ -156,9 +156,30 @@ function dashboard_bot_webapi_request(string $command, array $args, string $acto
     $baseUrl = rtrim(trim(config('DASHBOARD_WEBAPI_URL')), '/');
     $secretPath = trim(config('DASHBOARD_WEBAPI_PATH'));
     $hmacKey = config('DASHBOARD_WEBAPI_HMAC');
-    $serverCaFile = trim(config('DASHBOARD_WEBAPI_SERVER_CA_FILE'));
-    $clientCert = trim(config('DASHBOARD_WEBAPI_CLIENT_CERT_FILE'));
-    $clientKey = trim(config('DASHBOARD_WEBAPI_CLIENT_KEY_FILE'));
+    $tlsFile = static function (string $fileKey, string $pemKey, string $extension): string {
+        $pem = trim(config($pemKey));
+        if ($pem !== '') {
+            $pem = str_replace(["\r\n", "\r", "\\r\\n", "\\n", "\\r"], "\n", $pem);
+            if (!str_contains($pem, '-----BEGIN ')) throw new RuntimeException($pemKey . ' enthält kein PEM-Zertifikat.');
+            $path = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR
+                . 'ironshield-webapi-' . hash('sha256', $pem) . '.' . $extension;
+            if (!is_file($path) || !is_readable($path)) {
+                $temporary = $path . '.' . bin2hex(random_bytes(6)) . '.tmp';
+                if (@file_put_contents($temporary, $pem . "\n", LOCK_EX) === false) throw new RuntimeException('mTLS-Datei konnte nicht bereitgestellt werden.');
+                @chmod($temporary, 0600);
+                if (!@rename($temporary, $path) && !is_file($path)) {
+                    @unlink($temporary);
+                    throw new RuntimeException('mTLS-Datei konnte nicht sicher bereitgestellt werden.');
+                }
+                @chmod($path, 0600);
+            }
+            return $path;
+        }
+        return trim(config($fileKey));
+    };
+    $serverCaFile = $tlsFile('DASHBOARD_WEBAPI_SERVER_CA_FILE', 'DASHBOARD_WEBAPI_SERVER_CA_PEM', 'crt');
+    $clientCert = $tlsFile('DASHBOARD_WEBAPI_CLIENT_CERT_FILE', 'DASHBOARD_WEBAPI_CLIENT_CERT_PEM', 'pem');
+    $clientKey = $tlsFile('DASHBOARD_WEBAPI_CLIENT_KEY_FILE', 'DASHBOARD_WEBAPI_CLIENT_KEY_PEM', 'key');
     $parts = parse_url($baseUrl);
     if (!is_array($parts) || strtolower((string)($parts['scheme'] ?? '')) !== 'https'
         || empty($parts['host']) || isset($parts['user']) || isset($parts['pass'])
@@ -169,7 +190,7 @@ function dashboard_bot_webapi_request(string $command, array $args, string $acto
         throw new RuntimeException('Bot-WebAPI-Pfad oder HMAC-Schlüssel ist nicht konfiguriert.');
     }
     if (!is_readable($serverCaFile) || !is_readable($clientCert) || ($clientKey !== '' && !is_readable($clientKey))) {
-        throw new RuntimeException('Bot-WebAPI-CA oder Client-Zertifikat ist auf dem Website-Host nicht lesbar.');
+        throw new RuntimeException('Bot-WebAPI-mTLS fehlt: setze SERVER_CA_PEM, CLIENT_CERT_PEM und optional CLIENT_KEY_PEM (oder gültige *_FILE-Pfade).');
     }
 
     $body = json_encode(['cmd' => $command, 'args' => $args], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
@@ -178,55 +199,32 @@ function dashboard_bot_webapi_request(string $command, array $args, string $acto
     $canonical = implode("\n", ['v1', $timestamp, $nonce, $actor, hash('sha256', $body)]);
     $signature = hash_hmac('sha256', $canonical, $hmacKey);
     $headers = [
-        'Content-Type: application/json',
-        'Accept: application/json',
-        'X-IS-Ts: ' . $timestamp,
-        'X-IS-Nonce: ' . $nonce,
-        'X-IS-Actor: ' . $actor,
-        'X-IS-Sig: ' . $signature,
+        'Content-Type: application/json', 'Accept: application/json',
+        'X-IS-Ts: ' . $timestamp, 'X-IS-Nonce: ' . $nonce,
+        'X-IS-Actor: ' . $actor, 'X-IS-Sig: ' . $signature,
     ];
     $ssl = [
-        'verify_peer' => true,
-        'verify_peer_name' => true,
-        'peer_name' => (string)$parts['host'],
-        'SNI_enabled' => true,
-        'cafile' => $serverCaFile,
-        'local_cert' => $clientCert,
+        'verify_peer' => true, 'verify_peer_name' => true,
+        'peer_name' => (string)$parts['host'], 'SNI_enabled' => true,
+        'cafile' => $serverCaFile, 'local_cert' => $clientCert,
         'allow_self_signed' => false,
     ];
     if ($clientKey !== '') $ssl['local_pk'] = $clientKey;
     $context = stream_context_create([
-        'http' => [
-            'method' => 'POST',
-            'header' => implode("\r\n", $headers),
-            'content' => $body,
-            'ignore_errors' => true,
-            'timeout' => 12,
-            'protocol_version' => 1.1,
-        ],
+        'http' => ['method' => 'POST', 'header' => implode("\r\n", $headers), 'content' => $body,
+            'ignore_errors' => true, 'timeout' => 12, 'protocol_version' => 1.1],
         'ssl' => $ssl,
     ]);
-    $url = $baseUrl . '/' . $secretPath . '/rpc';
-    $raw = @file_get_contents($url, false, $context);
+    $raw = @file_get_contents($baseUrl . '/' . $secretPath . '/rpc', false, $context);
     $status = 0;
     foreach ($http_response_header ?? [] as $header) {
         if (preg_match('/^HTTP\/\S+\s+(\d+)/', $header, $matches) === 1) $status = (int)$matches[1];
     }
     $response = is_string($raw) ? json_decode($raw, true) : null;
     if ($status < 200 || $status >= 300 || !is_array($response) || empty($response['ok']) || !is_array($response['data'] ?? null)) {
-        throw new RuntimeException('Bot-WebAPI antwortet nicht erfolgreich (HTTP ' . $status . '). Prüfe mTLS, HMAC, Actor-Freigabe und Bot-Log.');
+        throw new RuntimeException('Die sichere Bot-WebAPI hat die Anfrage abgelehnt oder ist nicht erreichbar.');
     }
     return $response['data'];
-}
-
-$clientId = config('DISCORD_CLIENT_ID', '1479835689284669461');
-$botClientId = trim(config('DISCORD_BOT_CLIENT_ID')) ?: $clientId;
-
-function guild_can_manage(array $guild): bool
-{
-    $rawPermissions = $guild['permissions'] ?? $guild['permissions_new'] ?? '0';
-    $permissions = is_numeric($rawPermissions) ? (int)$rawPermissions : 0;
-    return !empty($guild['owner']) || (($permissions & 0x28) !== 0);
 }
 
 function dashboard_bridge_file(): string

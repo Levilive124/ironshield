@@ -51,20 +51,13 @@ Setze im Hosting-Panel `DISCORD_REDIRECT_URI` auf die öffentliche HTTPS-Callbac
 
 ### Externe Bot-WebAPI (mTLS)
 
-Das PHP-Dashboard kann den externen Bot direkt über dessen `cogs/webapi.py`-RPC abfragen. Das ist unabhängig von `DASHBOARD_BRIDGE_SECRET` und vom Discord-Bot-Token. Für Status und Modulverwaltung muss die Bot-WebAPI `status.public`, `modules.list` und `modules.set` bereitstellen; der Bot prüft Guild-Adminrechte selbst.
+Das Dashboard verwendet die bereitgestellte `webapi.py` des bestehenden Bot-Projekts für Bot-Status sowie das Ein- und Ausschalten von Bot-Modulen. Die API verlangt gegenseitiges TLS, einen geheimen URL-Pfad, HMAC-Signaturen und eine vom Bot autorisierte Discord-Nutzer-ID.
 
-Setze die folgenden Werte ausschließlich in der Hosting-Konfiguration der **Website**. URL ist die öffentlich erreichbare HTTPS-Basisadresse des Bot-Listeners mit Port, aber ohne Pfad:
+Die Datei gehört in den `cogs/`-Ordner des vollständigen Discord-Bot-Projekts und muss von dessen Extension-Loader geladen werden (z. B. `await bot.load_extension("cogs.webapi")`). Sie importiert unter anderem `modules`, `storage`, `rolesafety` und `owners`; diese Bot-Module müssen dort vorhanden sein.
 
-```text
-DASHBOARD_WEBAPI_URL=https://play.nod3.de:33041
-DASHBOARD_WEBAPI_PATH=<derselbe WEBAPI_PATH wie auf dem Bot>
-DASHBOARD_WEBAPI_HMAC=<derselbe WEBAPI_HMAC wie auf dem Bot>
-DASHBOARD_WEBAPI_SERVER_CA_FILE=/home/container/secrets/server-issuing-ca.crt
-DASHBOARD_WEBAPI_CLIENT_CERT_FILE=/home/container/secrets/dashboard-client.pem
-DASHBOARD_WEBAPI_CLIENT_KEY_FILE=/home/container/secrets/dashboard-client.key
-```
+Auf dem Bot-Host müssen `WEBAPI_ENABLED=1`, `WEBAPI_PORT=33041`, `WEBAPI_CERT`, `WEBAPI_CA`, `WEBAPI_CLIENT_CN=vercel-dash`, ein 64-stelliger Hex-Wert für `WEBAPI_PATH`, mindestens 32 zufällige Zeichen für `WEBAPI_HMAC` sowie `WEBAPI_ACTORS` gesetzt sein. `WEBAPI_ACTORS` muss die Discord-Nutzer-ID des Dashboard-Administrators enthalten; sie muss zugleich in `OWNER_IDS` des Bots stehen.
 
-`DASHBOARD_WEBAPI_SERVER_CA_FILE` muss die CA enthalten, die das Bot-Serverzertifikat ausgestellt hat. Das Client-Zertifikat muss von der CA aus `WEBAPI_CA` auf dem Bot akzeptiert werden; sein CN muss `WEBAPI_CLIENT_CN` entsprechen. Wenn Zertifikat und privater Schlüssel gemeinsam in einer PEM-Datei liegen, kann `DASHBOARD_WEBAPI_CLIENT_KEY_FILE` leer bleiben. Private Schlüssel und HMAC-Werte nie veröffentlichen. Die Website benötigt PHP-OpenSSL und HTTPS-Ausgangszugriff zum Bot-Port. Ein erfolgreicher Statusaufruf erscheint im Dashboard; unter „Server verwalten“ können Serveradmins Bot-Module aktivieren und deaktivieren.
+Auf Vercel Production werden `DASHBOARD_WEBAPI_URL=https://play.nod3.de:33041`, derselbe `WEBAPI_PATH` und `WEBAPI_HMAC` sowie `DASHBOARD_WEBAPI_SERVER_CA_PEM`, `DASHBOARD_WEBAPI_CLIENT_CERT_PEM` und `DASHBOARD_WEBAPI_CLIENT_KEY_PEM` benötigt. Das Client-Zertifikat muss von `WEBAPI_CA` signiert sein und den CN `vercel-dash` tragen. PEM-Werte direkt als geheime Vercel-Umgebungsvariablen speichern; der PHP-Code legt sie mit Dateirechten `0600` im temporären Laufzeitverzeichnis ab. Werte niemals in Git oder Chat veröffentlichen.
 
 ### Linux-Container mit `start.sh`
 

@@ -163,7 +163,9 @@
   }
   function renderModules(section,data) {
     const wrap=node('section','dashboard-bot-modules');
-    const head=node('div','dashboard-bot-modules-heading'); const copy=node('div'); copy.append(node('h3','','Bot-Module'),node('p','','Module dieses Servers über die sichere Bot-Verbindung verwalten.')); head.append(copy); wrap.append(head);
+    const head=node('div','dashboard-bot-modules-heading'); const copy=node('div');
+    copy.append(node('h3','','Bot-Module'),node('p','','Module dieses Servers über die sichere Bot-Verbindung verwalten.'));
+    head.append(copy); wrap.append(head);
     if (data.modules_error) wrap.append(node('p','dashboard-message is-error',`Bot-WebAPI-Verbindung fehlgeschlagen: ${data.modules_error}`));
     else if (!Array.isArray(data.modules?.categories)) wrap.append(node('p','dashboard-message is-error','Der Bot hat keine Modulübersicht geliefert.'));
     else for (const category of data.modules.categories) {
