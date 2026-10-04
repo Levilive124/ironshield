@@ -235,7 +235,11 @@ class IronShieldDashboardCog(commands.Cog):
         self._legacy_cleanup_retry_at = 0.0
 
     async def _bridge_request(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
-        configured_url = os.getenv("PUBLIC_SITE_URL", "https://bot-ironshield-dash.vercel.app").strip()
+        configured_url = os.getenv("PUBLIC_SITE_URL", "").strip()
+        if not configured_url:
+            raise RuntimeError("PUBLIC_SITE_URL fehlt. Trage die HTTPS-Adresse des aktuellen Website-Servers ein.")
+        if (urlsplit(configured_url).hostname or "").lower() == "ironshield.novium.link":
+            raise RuntimeError("PUBLIC_SITE_URL zeigt noch auf Novium. Trage die HTTPS-Adresse des aktuellen Website-Servers ein.")
         parsed_url = urlsplit(configured_url)
         try:
             port = parsed_url.port

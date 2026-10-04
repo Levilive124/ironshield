@@ -237,10 +237,10 @@ class IronShieldDashboardCog(commands.Cog):
     async def _bridge_request(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         configured_url = os.getenv("PUBLIC_SITE_URL", "").strip()
         configured_host = (urlsplit(configured_url).hostname or "").lower()
-        # Novium is retired for the dashboard. A stale host-panel variable must
-        # not send the bot's HTTPS requests back to the old website.
-        if not configured_url or configured_host == "ironshield.novium.link":
-            configured_url = "https://bot-ironshield-dash.vercel.app"
+        if not configured_url:
+            raise RuntimeError("PUBLIC_SITE_URL fehlt. Trage die HTTPS-Adresse des aktuellen Website-Servers ein.")
+        if configured_host == "ironshield.novium.link":
+            raise RuntimeError("PUBLIC_SITE_URL zeigt noch auf Novium. Trage die HTTPS-Adresse des aktuellen Website-Servers ein.")
         parsed_url = urlsplit(configured_url)
         try:
             port = parsed_url.port

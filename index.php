@@ -61,7 +61,32 @@ ini_set('session.gc_maxlifetime', '28800');
 session_name('is_sess');
 session_set_cookie_params(['lifetime' => 28800, 'path' => '/', 'secure' => $secureCookie, 'httponly' => true, 'samesite' => 'Lax']);
 try {
-    if (ironshield_storage_enabled()) session_set_save_handler(new IronShieldPostgresSessionHandler(), true);
+    if (ironshield_storage_enabled()) {
+        session_set_save_handler(new IronShieldPostgresSessionHandler(), true);
+    } else {
+        $sessionDirectory = trim((string)(getenv('TEAM_DATA_DIR') ?: ''));
+        if ($sessionDirectory === '') {
+            $sessionDirectory = is_dir('/home/container')
+                ? '/home/container/.ironshield-private'
+                : __DIR__ . DIRECTORY_SEPARATOR . '.ironshield-private';
+        }
+        $temporaryRoot = rtrim(sys_get_temp_dir(), '/\\');
+        $normalizedSessionDirectory = rtrim($sessionDirectory, '/\\');
+        if ($normalizedSessionDirectory === $temporaryRoot
+            || str_starts_with($normalizedSessionDirectory, $temporaryRoot . DIRECTORY_SEPARATOR)) {
+            throw new RuntimeException('Temporary session storage is not allowed.');
+        }
+        $sessionDirectory = rtrim($sessionDirectory, '/\\') . DIRECTORY_SEPARATOR . 'sessions';
+        if (!is_dir($sessionDirectory) && !@mkdir($sessionDirectory, 0700, true) && !is_dir($sessionDirectory)) {
+            throw new RuntimeException('Persistent session directory cannot be created.');
+        }
+        @chmod($sessionDirectory, 0700);
+        if (!is_writable($sessionDirectory)) throw new RuntimeException('Persistent session directory is not writable.');
+        session_save_path($sessionDirectory);
+    }
+    if (session_save_path() !== '' && !is_writable(session_save_path()) && !ironshield_storage_enabled()) {
+        throw new RuntimeException('Persistent session directory is not writable.');
+    }
     session_start();
 } catch (Throwable $error) {
     error_log('Iron Shield session startup failed: ' . get_class($error));
@@ -72,7 +97,9 @@ try {
         $sqlState = isset($cause->errorInfo[0]) ? (string)$cause->errorInfo[0] : (string)$cause->getCode();
         if (preg_match('/^[A-Z0-9]{5}$/i', $sqlState) !== 1) $sqlState = '';
     }
-    $errorMessage = 'Die Datenbank ist konfiguriert, aber derzeit nicht erreichbar.';
+    $errorMessage = ironshield_storage_enabled()
+        ? 'Die Datenbank ist konfiguriert, aber derzeit nicht erreichbar.'
+        : 'Der dauerhafte Sitzungsdatenspeicher ist nicht verfügbar.';
     if ($sqlState !== '') $errorMessage .= ' (SQLSTATE ' . $sqlState . ')';
     json_response(503, ['error' => $errorMessage]);
 }
@@ -92,10 +119,21 @@ function discord_redirect_uri(): string
 {
     $host = strtolower((string)(parse_url('https://' . ($_SERVER['HTTP_HOST'] ?? ''), PHP_URL_HOST) ?: ''));
     if (in_array($host, ['localhost', '127.0.0.1'], true)) return 'http://' . $host . ':8000/api/index.php?route=callback';
-    // Pin the known Production hostname so a stale Vercel environment variable
-    // cannot send dashboard logins back to the retired Novium website.
-    if ($host === 'bot-ironshield-dash.vercel.app') return 'https://bot-ironshield-dash.vercel.app/api/index.php?route=callback';
-    return config('DISCORD_REDIRECT_URI');
+    // Hosting domains are deployment-specific. Never infer a production OAuth
+    // callback from the incoming Host header: use the exact HTTPS URL registered
+    // in the Discord application and configured by the host administrator.
+    $redirectUri = trim(config('DISCORD_REDIRECT_URI'));
+    $parts = parse_url($redirectUri);
+    if (!is_array($parts)
+        || strtolower((string)($parts['scheme'] ?? '')) !== 'https'
+        || empty($parts['host'])
+        || isset($parts['user'])
+        || isset($parts['pass'])
+        || (string)($parts['path'] ?? '') !== '/api/index.php'
+        || (string)($parts['query'] ?? '') !== 'route=callback') {
+        return '';
+    }
+    return $redirectUri;
 }
 
 function oauth_state_cookie_name(string $state): string
@@ -156,6 +194,7 @@ function dashboard_bot_webapi_request(string $command, array $args, string $acto
     $baseUrl = rtrim(trim(config('DASHBOARD_WEBAPI_URL')), '/');
     $secretPath = trim(config('DASHBOARD_WEBAPI_PATH'));
     $hmacKey = config('DASHBOARD_WEBAPI_HMAC');
+    $requireClientCert = config('DASHBOARD_WEBAPI_REQUIRE_CLIENT_CERT', '1') !== '0';
     $tlsFile = static function (string $fileKey, string $pemKey, string $extension): string {
         $pem = trim(config($pemKey));
         if ($pem !== '') {
@@ -178,8 +217,8 @@ function dashboard_bot_webapi_request(string $command, array $args, string $acto
         return trim(config($fileKey));
     };
     $serverCaFile = $tlsFile('DASHBOARD_WEBAPI_SERVER_CA_FILE', 'DASHBOARD_WEBAPI_SERVER_CA_PEM', 'crt');
-    $clientCert = $tlsFile('DASHBOARD_WEBAPI_CLIENT_CERT_FILE', 'DASHBOARD_WEBAPI_CLIENT_CERT_PEM', 'pem');
-    $clientKey = $tlsFile('DASHBOARD_WEBAPI_CLIENT_KEY_FILE', 'DASHBOARD_WEBAPI_CLIENT_KEY_PEM', 'key');
+    $clientCert = $requireClientCert ? $tlsFile('DASHBOARD_WEBAPI_CLIENT_CERT_FILE', 'DASHBOARD_WEBAPI_CLIENT_CERT_PEM', 'pem') : '';
+    $clientKey = $requireClientCert ? $tlsFile('DASHBOARD_WEBAPI_CLIENT_KEY_FILE', 'DASHBOARD_WEBAPI_CLIENT_KEY_PEM', 'key') : '';
     $parts = parse_url($baseUrl);
     if (!is_array($parts) || strtolower((string)($parts['scheme'] ?? '')) !== 'https'
         || empty($parts['host']) || isset($parts['user']) || isset($parts['pass'])
@@ -189,8 +228,11 @@ function dashboard_bot_webapi_request(string $command, array $args, string $acto
     if (preg_match('/^[a-f0-9]{64}$/i', $secretPath) !== 1 || strlen($hmacKey) < 32) {
         throw new RuntimeException('Bot-WebAPI-Pfad oder HMAC-Schlüssel ist nicht konfiguriert.');
     }
-    if (!is_readable($serverCaFile) || !is_readable($clientCert) || ($clientKey !== '' && !is_readable($clientKey))) {
-        throw new RuntimeException('Bot-WebAPI-mTLS fehlt: setze SERVER_CA_PEM, CLIENT_CERT_PEM und optional CLIENT_KEY_PEM (oder gültige *_FILE-Pfade).');
+    if (!is_readable($serverCaFile)) {
+        throw new RuntimeException('Bot-WebAPI-Serverprüfung fehlt: setze DASHBOARD_WEBAPI_SERVER_CA_PEM (oder SERVER_CA_FILE).');
+    }
+    if ($requireClientCert && (!is_readable($clientCert) || ($clientKey !== '' && !is_readable($clientKey)))) {
+        throw new RuntimeException('Bot-WebAPI-mTLS fehlt: setze CLIENT_CERT_PEM und optional CLIENT_KEY_PEM (oder gültige *_FILE-Pfade), oder aktiviere den HMAC-only-Modus auf Website und Bot.');
     }
 
     $body = json_encode(['cmd' => $command, 'args' => $args], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
@@ -206,10 +248,13 @@ function dashboard_bot_webapi_request(string $command, array $args, string $acto
     $ssl = [
         'verify_peer' => true, 'verify_peer_name' => true,
         'peer_name' => (string)$parts['host'], 'SNI_enabled' => true,
-        'cafile' => $serverCaFile, 'local_cert' => $clientCert,
+        'cafile' => $serverCaFile,
         'allow_self_signed' => false,
     ];
-    if ($clientKey !== '') $ssl['local_pk'] = $clientKey;
+    if ($requireClientCert) {
+        $ssl['local_cert'] = $clientCert;
+        if ($clientKey !== '') $ssl['local_pk'] = $clientKey;
+    }
     $context = stream_context_create([
         'http' => ['method' => 'POST', 'header' => implode("\r\n", $headers), 'content' => $body,
             'ignore_errors' => true, 'timeout' => 12, 'protocol_version' => 1.1],
@@ -229,9 +274,55 @@ function dashboard_bot_webapi_request(string $command, array $args, string $acto
 
 function dashboard_bridge_file(): string
 {
-    $directory = __DIR__ . DIRECTORY_SEPARATOR . '.ironshield-private';
-    if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) throw new RuntimeException('Privater Dashboard-Speicher konnte nicht angelegt werden.');
-    return $directory . DIRECTORY_SEPARATOR . 'dashboard-bridge.json';
+    $directory = trim((string)(getenv('TEAM_DATA_DIR') ?: ''));
+    if ($directory === '') {
+        $directory = is_dir('/home/container')
+            ? '/home/container/.ironshield-private'
+            : __DIR__ . DIRECTORY_SEPARATOR . '.ironshield-private';
+    }
+    $temporaryRoot = rtrim(sys_get_temp_dir(), '/\\');
+    $normalizedDirectory = rtrim($directory, '/\\');
+    if ($normalizedDirectory === $temporaryRoot
+        || str_starts_with($normalizedDirectory, $temporaryRoot . DIRECTORY_SEPARATOR)) {
+        throw new RuntimeException('Temporary dashboard storage is not allowed.');
+    }
+    if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) {
+        throw new RuntimeException('Privater Dashboard-Speicher konnte nicht angelegt werden.');
+    }
+    @chmod($directory, 0700);
+    if (!is_writable($directory)) throw new RuntimeException('Privater Dashboard-Speicher ist nicht beschreibbar.');
+
+    $documentRoot = realpath(__DIR__);
+    $realDirectory = realpath($directory);
+    if ($documentRoot !== false && $realDirectory !== false && str_starts_with($realDirectory, $documentRoot . DIRECTORY_SEPARATOR)) {
+        $denyFile = $directory . DIRECTORY_SEPARATOR . '.htaccess';
+        if (!is_file($denyFile)) @file_put_contents($denyFile, "Require all denied\nDeny from all\n");
+        $webConfig = $directory . DIRECTORY_SEPARATOR . 'web.config';
+        if (!is_file($webConfig)) @file_put_contents($webConfig, '<?xml version="1.0" encoding="UTF-8"?><configuration><system.webServer><security><authorization><remove users="*" roles="" verbs=""/><add accessType="Deny" users="*"/></authorization></security></system.webServer></configuration>');
+    }
+
+    $path = $directory . DIRECTORY_SEPARATOR . 'dashboard-bridge.json';
+    $legacyPath = __DIR__ . DIRECTORY_SEPARATOR . '.ironshield-private' . DIRECTORY_SEPARATOR . 'dashboard-bridge.json';
+    if (!is_file($path) && is_file($legacyPath) && realpath(dirname($legacyPath)) !== realpath($directory)) {
+        $lock = @fopen($directory . DIRECTORY_SEPARATOR . 'dashboard-migration.lock', 'c+');
+        if ($lock !== false && flock($lock, LOCK_EX)) {
+            try {
+                if (!is_file($path)) {
+                    $legacyJson = @file_get_contents($legacyPath);
+                    if (is_string($legacyJson) && is_array(json_decode($legacyJson, true))
+                        && @file_put_contents($path, $legacyJson, LOCK_EX) !== false) {
+                        @chmod($path, 0600);
+                    }
+                }
+            } finally {
+                flock($lock, LOCK_UN);
+                fclose($lock);
+            }
+        } elseif (is_resource($lock)) {
+            fclose($lock);
+        }
+    }
+    return $path;
 }
 
 function dashboard_bot_token(): string

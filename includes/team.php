@@ -139,7 +139,18 @@ function team_sync_persistent_backup(string $primaryDirectory): void
     $primaryReal = realpath($primaryDirectory);
     $backupReal = realpath($backupDirectory);
     if (($primaryReal !== false && $backupReal !== false && $primaryReal === $backupReal) || rtrim($primaryDirectory, '/\\') === rtrim($backupDirectory, '/\\')) return;
-    if (!is_dir($backupDirectory) && !@mkdir($backupDirectory, 0700, true) && !is_dir($backupDirectory)) throw new RuntimeException('Die zusätzliche dauerhafte Datensicherung konnte nicht angelegt werden.');
+    if (!is_dir($backupDirectory) && !is_writable(dirname($backupDirectory))) {
+        error_log('Iron Shield secondary backup is unavailable; the configured persistent primary store remains active.');
+        return;
+    }
+    if (!is_dir($backupDirectory) && !@mkdir($backupDirectory, 0700, true) && !is_dir($backupDirectory)) {
+        error_log('Iron Shield secondary backup could not be created; the configured persistent primary store remains active.');
+        return;
+    }
+    if (!is_writable($backupDirectory)) {
+        error_log('Iron Shield secondary backup is not writable; the configured persistent primary store remains active.');
+        return;
+    }
     @chmod($backupDirectory, 0700);
     $documentRoot = realpath(dirname(__DIR__));
     $backupReal = realpath($backupDirectory);
