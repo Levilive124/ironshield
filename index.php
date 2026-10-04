@@ -796,3 +796,15 @@ if ($route === '') {
 }
 
 json_response(404, ['error' => 'route_not_found']);
+
+
+function guild_can_manage(array $guild): bool
+{
+    if (!empty($guild['owner']) || !empty($guild['manage'])) return true;
+
+    // Discord permission flags: ADMINISTRATOR = 0x8, MANAGE_GUILD = 0x20.
+    $permissions = (string)($guild['permissions'] ?? $guild['permissions_new'] ?? '0');
+    if (preg_match('/^\d{1,20}$/', $permissions) !== 1) return false;
+
+    return (((int)$permissions) & 0x28) !== 0;
+}
