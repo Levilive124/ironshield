@@ -92,7 +92,6 @@ function config(string $key, string $default = ''): string
 function discord_redirect_uri(): string
 {
     $host = strtolower((string)(parse_url('https://' . ($_SERVER['HTTP_HOST'] ?? ''), PHP_URL_HOST) ?: ''));
-    if ($host === 'ironshield.novium.link') return 'https://ironshield.novium.link/api/index.php?route=callback';
     if (in_array($host, ['localhost', '127.0.0.1'], true)) return 'http://' . $host . ':8000/api/index.php?route=callback';
     return config('DISCORD_REDIRECT_URI');
 }

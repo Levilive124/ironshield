@@ -40,8 +40,8 @@ In Vercel unter **Project → Settings → Environment Variables** serverseitig 
 
 - `DISCORD_CLIENT_ID`
 - `DISCORD_CLIENT_SECRET`
-- `DISCORD_REDIRECT_URI` — `https://<deine-vercel-domain>/api/index.php?route=callback`
-- `PUBLIC_SITE_URL` — `https://<deine-vercel-domain>`
+- `DISCORD_REDIRECT_URI` — `https://bot-ironshield-dash.vercel.app/api/index.php?route=callback`
+- `PUBLIC_SITE_URL` — `https://bot-ironshield-dash.vercel.app`
 - `DASHBOARD_BRIDGE_SECRET` — derselbe zufällige Schlüssel wie beim Bot, mindestens 32 Zeichen
 - `DASHBOARD_BOT_TOKEN` — nur, falls der Website-Code die Discord-API direkt abfragen muss
 - `TEAM_ADMIN_USERNAME` und `TEAM_ADMIN_PASSWORD`
@@ -53,13 +53,15 @@ Bei Neon ergänzt der Adapter die Endpoint-ID aus dem Datenbank-Hostname automat
 
 Der Bot-Token und der Bridge-Schlüssel bleiben ausschließlich in serverseitigen Umgebungsvariablen. Sie werden nicht in HTML, JavaScript oder statischen Dateien eingebettet. Für Ticketanhänge begrenzt Vercel die Anfragegröße; auf Vercel lässt das Portal daher derzeit insgesamt bis zu 4 MiB pro Upload-Anfrage zu.
 
-Die Redirect-URL muss exakt dieselbe sein wie unter **Discord Developer Portal → OAuth2 → Redirects**. Der Bot-Host braucht nach dem Domainwechsel `PUBLIC_SITE_URL` mit der neuen HTTPS-Domain und denselben `DASHBOARD_BRIDGE_SECRET`. Browser-Aufrufe, OAuth-Callbacks und Bot-Synchronisierung verwenden `/api/index.php?route=…`, damit sie direkt die PHP-Funktion aufrufen und nicht von statischen Dateien oder Rewrites abgefangen werden.
+Die Redirect-URL muss exakt dieselbe sein wie unter **Discord Developer Portal → OAuth2 → Redirects**. Für die derzeitige Vercel-Production-Domain lautet sie `https://bot-ironshield-dash.vercel.app/api/index.php?route=callback`. Der Bot-Host braucht nach dem Domainwechsel `PUBLIC_SITE_URL=https://bot-ironshield-dash.vercel.app` und denselben `DASHBOARD_BRIDGE_SECRET` wie Vercel. Browser-Aufrufe, OAuth-Callbacks und Bot-Synchronisierung verwenden `/api/index.php?route=…`, damit sie direkt die PHP-Funktion aufrufen und nicht von statischen Dateien oder Rewrites abgefangen werden.
+
+Wenn die Discord-Autorisierungs-URL weiterhin `redirect_uri=https://ironshield.novium.link/?route=callback` enthält, ist die alte Callback-Adresse noch in Vercel Production gespeichert oder es läuft noch ein altes Deployment. Aktualisiere dort `DISCORD_REDIRECT_URI`, speichere und deploye Production erneut. Discord selbst wählt den Rücksprung nicht aus; es verwendet genau die `redirect_uri`, die die Website im Autorisierungs-Link mitsendet.
 
 Die Website-Einladelinks fordern keine Berechtigung zum Erstellen von Kanälen oder Senden von Nachrichten an. Das Dashboard listet vorhandene Kanäle nur zum Auswählen. Im Bot-Verzeichnis gibt es in dieser Version keinen Kanal-Erstellungs- oder Nachrichten-Sendeaufruf; die vorhandene Startbereinigung löscht ausschließlich alte Relay-Kanäle mit dem eindeutigen IronShield-Marker.
 
 ### PHP-API-Bereitstellung prüfen
 
-Rufe nach einem Deployment `https://<deine-vercel-domain>/api/health.php` direkt im Browser auf. Bei korrekt ausgeführter PHP-Funktion muss JSON `{"ok":true,"service":"ironshield-api"}` erscheinen. HTML, eine Vercel-Fehlerseite oder ein Redirect bedeutet, dass der API-Endpunkt nicht als PHP-Funktion bereitgestellt wird. Erst wenn dieser Health-Endpunkt JSON liefert, prüfe `https://<deine-vercel-domain>/api/index.php?route=dashboard_data`; ohne Anmeldung ist `{"error":"login_required"}` die erwartete JSON-Antwort. Ein Datenbankfehler kommt erst danach und wird als JSON mit HTTP 503 ausgegeben.
+Rufe nach einem Deployment `https://bot-ironshield-dash.vercel.app/api/health.php` direkt im Browser auf. Bei korrekt ausgeführter PHP-Funktion muss JSON `{"ok":true,"service":"ironshield-api"}` erscheinen. HTML, eine Vercel-Fehlerseite oder ein Redirect bedeutet, dass der API-Endpunkt nicht als PHP-Funktion bereitgestellt wird. Erst wenn dieser Health-Endpunkt JSON liefert, prüfe `https://bot-ironshield-dash.vercel.app/api/index.php?route=dashboard_data`; ohne Anmeldung ist `{"error":"login_required"}` die erwartete JSON-Antwort. Ein Datenbankfehler kommt erst danach und wird als JSON mit HTTP 503 ausgegeben.
 
 ## Deployment
 
