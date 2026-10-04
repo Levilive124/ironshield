@@ -27,6 +27,8 @@ In Vercel unter **Project → Settings → Environment Variables** serverseitig 
 - `TEAM_ADMIN_USERNAME` und `TEAM_ADMIN_PASSWORD`
 - `DATABASE_URL` — TLS-geschützte PostgreSQL-Verbindungs-URL (z. B. von Neon)
 
+Der PHP-Session-Handler hält seinen Sperr-Lock in einer eigenen kurzen Transaktion. Daher funktionieren sowohl direkte PostgreSQL-URLs als auch Transaktions-Pooler-URLs; verwende für den Datenbank-Import und für Vercel dieselbe Datenbank und dasselbe Schema.
+
 Der Bot-Token und der Bridge-Schlüssel bleiben ausschließlich in serverseitigen Umgebungsvariablen. Sie werden nicht in HTML, JavaScript oder statischen Dateien eingebettet. Für Ticketanhänge begrenzt Vercel die Anfragegröße; auf Vercel lässt das Portal daher derzeit insgesamt bis zu 4 MiB pro Upload-Anfrage zu.
 
 Die Redirect-URL muss exakt dieselbe sein wie unter **Discord Developer Portal → OAuth2 → Redirects**. Der Bot-Host braucht nach dem Domainwechsel `PUBLIC_SITE_URL` mit der neuen HTTPS-Domain und denselben `DASHBOARD_BRIDGE_SECRET`. Browser-Aufrufe, OAuth-Callbacks und Bot-Synchronisierung verwenden `/api/index.php?route=…`, damit sie direkt die PHP-Funktion aufrufen und nicht von statischen Dateien oder Rewrites abgefangen werden.

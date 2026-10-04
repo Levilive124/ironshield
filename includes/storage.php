@@ -6,23 +6,32 @@ function ironshield_storage_enabled(): bool
     return trim((string)(getenv('DATABASE_URL') ?: '')) !== '';
 }
 
-function ironshield_database(): PDO
+function ironshield_database_connection(): PDO
 {
-    static $pdo = null;
-    if ($pdo instanceof PDO) return $pdo;
     $url = trim((string)(getenv('DATABASE_URL') ?: ''));
-    if ($url === '') throw new RuntimeException('Der dauerhafte Datenbankspeicher ist nicht eingerichtet.');
     $parts = parse_url($url);
     if (!is_array($parts) || empty($parts['host']) || empty($parts['path'])) throw new RuntimeException('DATABASE_URL ist ungültig.');
     $database = rawurldecode(ltrim((string)$parts['path'], '/'));
     if ($database === '') throw new RuntimeException('DATABASE_URL enthält keinen Datenbanknamen.');
     $dsn = 'pgsql:host=' . $parts['host'] . ';port=' . (int)($parts['port'] ?? 5432) . ';dbname=' . $database . ';sslmode=require';
     try {
-        $pdo = new PDO($dsn, rawurldecode((string)($parts['user'] ?? '')), rawurldecode((string)($parts['pass'] ?? '')), [
+        return new PDO($dsn, rawurldecode((string)($parts['user'] ?? '')), rawurldecode((string)($parts['pass'] ?? '')), [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES => false,
         ]);
+    } catch (Throwable $error) {
+        error_log('Iron Shield database connection failed: ' . get_class($error));
+        throw new RuntimeException('Der dauerhafte Datenbankspeicher ist gerade nicht verfügbar.');
+    }
+}
+
+function ironshield_database(): PDO
+{
+    static $pdo = null;
+    if ($pdo instanceof PDO) return $pdo;
+    $pdo = ironshield_database_connection();
+    try {
         $pdo->exec("CREATE TABLE IF NOT EXISTS ironshield_state (state_key TEXT PRIMARY KEY, payload JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
         $pdo->exec("CREATE TABLE IF NOT EXISTS ironshield_sessions (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, last_activity BIGINT NOT NULL, expires_at BIGINT NOT NULL)");
         $pdo->exec("CREATE INDEX IF NOT EXISTS ironshield_sessions_expires_idx ON ironshield_sessions (expires_at)");
@@ -90,24 +99,48 @@ function ironshield_attachment_delete(string $id): void
 
 final class IronShieldPostgresSessionHandler implements SessionHandlerInterface
 {
-    private ?string $lockedId = null;
+    private ?PDO $sessionPdo = null;
     public function open(string $path, string $name): bool { return true; }
     public function close(): bool
     {
-        if ($this->lockedId !== null) {
-            $statement = ironshield_database()->prepare('SELECT pg_advisory_unlock(hashtext(:id))');
-            $statement->execute(['id' => $this->lockedId]);
-            $this->lockedId = null;
+        if ($this->sessionPdo instanceof PDO) {
+            try {
+                if ($this->sessionPdo->inTransaction()) $this->sessionPdo->commit();
+            } catch (Throwable $error) {
+                if ($this->sessionPdo->inTransaction()) $this->sessionPdo->rollBack();
+                error_log('Iron Shield database session close failed: ' . get_class($error));
+                $this->sessionPdo = null;
+                return false;
+            }
+            $this->sessionPdo = null;
         }
         return true;
     }
 
+    private function lockSession(string $id): PDO
+    {
+        if ($this->sessionPdo instanceof PDO && $this->sessionPdo->inTransaction()) return $this->sessionPdo;
+        // Create/check the schema through the application connection first. Keep
+        // the session lock in its own transaction so transaction-pooler URLs
+        // retain one backend for the whole PHP session lifecycle.
+        ironshield_database();
+        $this->sessionPdo = ironshield_database_connection();
+        $this->sessionPdo->beginTransaction();
+        try {
+            $lock = $this->sessionPdo->prepare('SELECT pg_advisory_xact_lock(918274, hashtext(:id))');
+            $lock->execute(['id' => $id]);
+            return $this->sessionPdo;
+        } catch (Throwable $error) {
+            if ($this->sessionPdo->inTransaction()) $this->sessionPdo->rollBack();
+            $this->sessionPdo = null;
+            throw $error;
+        }
+    }
+
     public function read(string $id): string|false
     {
-        $lock = ironshield_database()->prepare('SELECT pg_advisory_lock(hashtext(:id))');
-        $lock->execute(['id' => $id]);
-        $this->lockedId = $id;
-        $statement = ironshield_database()->prepare('SELECT payload FROM ironshield_sessions WHERE session_id = :id AND expires_at > :now');
+        $pdo = $this->lockSession($id);
+        $statement = $pdo->prepare('SELECT payload FROM ironshield_sessions WHERE session_id = :id AND expires_at > :now');
         $statement->execute(['id' => $id, 'now' => time()]);
         $row = $statement->fetch();
         return is_array($row) ? (string)$row['payload'] : '';
@@ -116,18 +149,34 @@ final class IronShieldPostgresSessionHandler implements SessionHandlerInterface
     public function write(string $id, string $data): bool
     {
         $now = time();
-        $statement = ironshield_database()->prepare('INSERT INTO ironshield_sessions (session_id, payload, last_activity, expires_at) VALUES (:id, :payload, :now, :expires) ON CONFLICT (session_id) DO UPDATE SET payload = EXCLUDED.payload, last_activity = EXCLUDED.last_activity, expires_at = EXCLUDED.expires_at');
-        $saved = $statement->execute(['id' => $id, 'payload' => $data, 'now' => $now, 'expires' => $now + 28800]);
-        $this->close();
-        return $saved;
+        $pdo = $this->lockSession($id);
+        try {
+            $statement = $pdo->prepare('INSERT INTO ironshield_sessions (session_id, payload, last_activity, expires_at) VALUES (:id, :payload, :now, :expires) ON CONFLICT (session_id) DO UPDATE SET payload = EXCLUDED.payload, last_activity = EXCLUDED.last_activity, expires_at = EXCLUDED.expires_at');
+            $saved = $statement->execute(['id' => $id, 'payload' => $data, 'now' => $now, 'expires' => $now + 28800]);
+            $pdo->commit();
+            $this->sessionPdo = null;
+            return $saved;
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $this->sessionPdo = null;
+            throw $error;
+        }
     }
 
     public function destroy(string $id): bool
     {
-        $statement = ironshield_database()->prepare('DELETE FROM ironshield_sessions WHERE session_id = :id');
-        $deleted = $statement->execute(['id' => $id]);
-        $this->close();
-        return $deleted;
+        $pdo = $this->lockSession($id);
+        try {
+            $statement = $pdo->prepare('DELETE FROM ironshield_sessions WHERE session_id = :id');
+            $deleted = $statement->execute(['id' => $id]);
+            $pdo->commit();
+            $this->sessionPdo = null;
+            return $deleted;
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $this->sessionPdo = null;
+            throw $error;
+        }
     }
 
     public function gc(int $max_lifetime): int|false
