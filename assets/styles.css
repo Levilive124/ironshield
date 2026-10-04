@@ -278,3 +278,39 @@ html,body{width:100%;max-width:100%;overflow-x:hidden}
 .error-page { min-height: 100vh; display: grid; align-content: center; max-width: 680px; }
 
 .dashboard-page .dashboard-eyebrow{display:flex;align-items:center;gap:9px}.dashboard-page .dashboard-eyebrow img{width:26px;height:26px;object-fit:contain}
+
+/* Unified liquid-glass surfaces across the Iron Shield site. */
+:root{--glass-surface:linear-gradient(145deg,rgba(25,35,41,.78),rgba(12,19,25,.66));--glass-surface-strong:linear-gradient(145deg,rgba(25,35,41,.9),rgba(12,19,25,.82));--glass-border:rgba(220,239,229,.14);--glass-highlight:rgba(255,255,255,.075);--glass-shadow:0 18px 55px rgba(0,0,0,.2),inset 0 1px rgba(255,255,255,.065)}
+.site-header,.portal-head,.legal-toc,.legal-content,.invite-panel,.feature-card,.step-item,.faq-item,.float-card,.dashboard-overview,.dashboard-connection,.guild-card,.stat-card,.user-chip,.settings-panel,.settings-content,.guild-dialog,.announcement-card,.ticket-form,.portal-feature,.ticket-context,.ticket-editor-section,.ticket-panel-card,.dashboard-manage-nav,.team-account,.ticket-message,.toast{border-color:var(--glass-border);background:var(--glass-surface);backdrop-filter:blur(20px) saturate(145%);-webkit-backdrop-filter:blur(20px) saturate(145%);box-shadow:var(--glass-shadow)}
+.site-header,.portal-head{border:1px solid var(--glass-border);border-radius:999px;background:linear-gradient(110deg,rgba(19,28,35,.82),rgba(15,24,29,.64));box-shadow:0 16px 44px rgba(0,0,0,.2),inset 0 1px rgba(255,255,255,.09)}
+.site-header{margin-top:12px;padding-inline:20px}
+.portal-head{padding-inline:18px}
+.main-nav,.portal-links{border:1px solid rgba(220,239,229,.11);border-radius:999px;background:rgba(221,239,230,.045);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);box-shadow:inset 0 1px rgba(255,255,255,.055)}
+.nav-cta,.main-nav>a.nav-cta{box-shadow:0 6px 20px rgba(165,229,139,.18),inset 0 1px rgba(255,255,255,.28)}
+.portal-links>a,.main-nav>a:not(.nav-cta){transition:background .2s,border-color .2s,color .2s}
+.main-nav>a:not(.nav-cta):hover,.portal-links>a:hover{background:rgba(255,255,255,.06);border-radius:999px}
+.feature-card,.invite-panel,.portal-card,.dashboard-overview,.guild-card,.stat-card,.settings-content,.user-chip,.dashboard-connection,.guild-dialog,.announcement-card,.ticket-form,.portal-feature,.ticket-context,.legal-toc,.legal-content,.ticket-editor-section,.ticket-panel-card,.dashboard-manage-nav,.team-account,.ticket-message,.toast{border-radius:18px}
+.feature-card{background:var(--glass-surface);box-shadow:0 18px 50px rgba(0,0,0,.18),inset 0 1px rgba(255,255,255,.075)}
+.feature-card:hover,.portal-card:hover,.guild-card:hover{border-color:rgba(190,240,202,.29);box-shadow:0 22px 62px rgba(0,0,0,.25),inset 0 1px rgba(255,255,255,.09)}
+.step-item{margin:10px 0;padding:20px 22px;border:1px solid var(--glass-border);border-radius:16px;grid-template-columns:49px 1fr 22px;background:var(--glass-surface);box-shadow:inset 0 1px rgba(255,255,255,.055)}
+.faq-item{margin:12px 0;border:1px solid var(--glass-border);border-radius:16px;background:var(--glass-surface);overflow:hidden;transition:border-color .2s,background .2s,box-shadow .2s}
+.faq-item:hover{border-color:rgba(205,236,215,.23)}
+.faq-item[open]{background:var(--glass-surface-strong);border-color:rgba(190,240,202,.22)}
+.faq-item summary{padding:19px 20px;gap:16px}
+.faq-item summary:focus{outline:none}
+.faq-item summary:focus-visible{outline:2px solid rgba(165,229,139,.72);outline-offset:-3px;border-radius:13px}
+.faq-item[open] summary{border-bottom:1px solid rgba(220,239,229,.09)}
+.faq-item p{margin:0;padding:14px 20px 20px;max-width:680px}
+.faq-plus{flex:0 0 25px;border:1px solid rgba(220,239,229,.14);border-radius:50%;background:rgba(255,255,255,.035);box-shadow:inset 0 1px rgba(255,255,255,.06)}
+.invite-panel,.legal-content{background:var(--glass-surface-strong)}
+.portal-input,.portal-select,.portal-textarea,.guild-search,.guild-filter,.ticket-editor-field .portal-input,.ticket-editor-field .portal-select,.ticket-editor-field .portal-textarea,.ticket-editor-list-row .portal-input,.ticket-editor-list-row .portal-textarea,.ticket-hours-row input[type=time]{border-color:rgba(220,239,229,.15);background:rgba(5,10,14,.38);box-shadow:inset 0 1px rgba(255,255,255,.035);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.portal-input:focus,.portal-select:focus,.portal-textarea:focus,.guild-search:focus,.guild-filter:focus,.ticket-editor-field .portal-input:focus,.ticket-editor-field .portal-select:focus,.ticket-editor-field .portal-textarea:focus,.ticket-editor-list-row .portal-input:focus,.ticket-editor-list-row .portal-textarea:focus,.ticket-hours-row input[type=time]:focus{outline:2px solid rgba(165,229,139,.55);outline-offset:2px;border-color:rgba(165,229,139,.65)}
+.button-quiet,.logout-button,.refresh-button,.portal-button.secondary,.guild-badge,.ticket-editor-add,.ticket-editor-panel-head>.button{border:1px solid rgba(220,239,229,.14);background:rgba(255,255,255,.045);box-shadow:inset 0 1px rgba(255,255,255,.065);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.button-primary,.portal-button:not(.secondary),.ticket-editor-submit{box-shadow:0 9px 28px rgba(165,229,139,.18),inset 0 1px rgba(255,255,255,.28)}
+:focus-visible{outline-color:rgba(165,229,139,.76)}
+body[data-theme="light"]{--glass-surface:linear-gradient(145deg,rgba(255,255,255,.76),rgba(237,244,240,.62));--glass-surface-strong:linear-gradient(145deg,rgba(255,255,255,.94),rgba(238,245,241,.86));--glass-border:rgba(28,49,39,.13);--glass-highlight:rgba(255,255,255,.72);--glass-shadow:0 18px 50px rgba(32,54,42,.09),inset 0 1px rgba(255,255,255,.82)}
+body[data-theme="light"] .site-header,body[data-theme="light"] .portal-head{background:linear-gradient(110deg,rgba(255,255,255,.86),rgba(244,249,246,.72))}
+body[data-theme="light"] .main-nav,body[data-theme="light"] .portal-links{background:rgba(255,255,255,.46);border-color:rgba(28,49,39,.11)}
+body[data-theme="light"] .faq-item,body[data-theme="light"] .step-item,body[data-theme="light"] .feature-card,body[data-theme="light"] .portal-card,body[data-theme="light"] .guild-card,body[data-theme="light"] .stat-card,body[data-theme="light"] .legal-content,body[data-theme="light"] .legal-toc{background:var(--glass-surface)}
+body[data-theme="light"] .portal-input,body[data-theme="light"] .portal-select,body[data-theme="light"] .portal-textarea,body[data-theme="light"] .guild-search,body[data-theme="light"] .guild-filter{background:rgba(255,255,255,.56);border-color:rgba(28,49,39,.15)}
+@media(prefers-reduced-transparency:reduce){.site-header,.portal-head,.main-nav,.portal-links,.feature-card,.step-item,.faq-item,.invite-panel,.portal-card,.dashboard-overview,.dashboard-connection,.guild-card,.stat-card,.settings-content,.guild-dialog,.legal-toc,.legal-content{backdrop-filter:none;-webkit-backdrop-filter:none;background:rgba(16,23,28,.96)}body[data-theme="light"] .site-header,body[data-theme="light"] .portal-head,body[data-theme="light"] .feature-card,body[data-theme="light"] .faq-item,body[data-theme="light"] .step-item,body[data-theme="light"] .legal-content{background:rgba(248,251,249,.98)}}

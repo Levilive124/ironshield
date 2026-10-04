@@ -95,10 +95,8 @@ function json_response(int $status, array $data): never
 
 function failure_page(string $message, int $status = 500): never
 {
-    http_response_code($status);
-    header('Content-Type: text/html; charset=utf-8');
-    header('Cache-Control: no-store');
-    readfile(__DIR__ . '/error.html');
+    $query = http_build_query(['message' => $message, 'status' => $status], '', '&', PHP_QUERY_RFC3986);
+    header('Location: /error.html?' . $query, true, 303);
     exit;
 }
 
@@ -728,7 +726,7 @@ if ($route === 'callback') {
     $savedState = $stateCookie !== '' ? (string)($_COOKIE[$stateCookie] ?? ($sessionStateIsFresh ? ($sessionState['value'] ?? '') : '')) : '';
     if ($stateCookie !== '') unset($_SESSION['oauth_states'][$stateCookie]);
     if ($stateCookie !== '') setcookie($stateCookie, '', ['expires' => time() - 3600, 'path' => '/', 'secure' => $secureCookie, 'httponly' => true, 'samesite' => 'Lax']);
-    if ($returnedState === '' || $savedState === '' || !hash_equals($savedState, $returnedState)) failure_page('Der Rücksprung von Discord konnte nicht diesem Login zugeordnet werden. Starte den Login einmal neu. Falls der Fehler bleibt, lade die neueste index.php auf den Webspace und prüfe, dass du durchgehend dieselbe HTTPS-Adresse verwendest.', 400);
+    if ($returnedState === '' || $savedState === '' || !hash_equals($savedState, $returnedState)) failure_page('Der Rücksprung von Discord konnte nicht diesem Login zugeordnet werden. Starte den Login neu und prüfe, dass die Callback-URL in Vercel und im Discord Developer Portal exakt übereinstimmt.', 400);
     if (isset($_GET['error'])) failure_page('Die Discord-Anmeldung wurde abgebrochen.', 400);
     $code = (string)($_GET['code'] ?? '');
     $redirectUri = discord_redirect_uri();
@@ -758,7 +756,7 @@ if ($route === 'callback') {
         exit;
     } catch (Throwable $error) {
         error_log('Discord OAuth callback failed: ' . $error->getMessage());
-        failure_page('Die Verbindung zu Discord ist fehlgeschlagen. Bitte prüfe Client Secret, Callback-URL und PHP-HTTPS-Unterstützung.', 502);
+        failure_page('Die Verbindung zu Discord ist fehlgeschlagen. Bitte prüfe Client Secret, Callback-URL und den HTTPS-Zugriff des Website-Hosts.', 502);
     }
 }
 
