@@ -12,8 +12,8 @@
       <stop offset="1" stop-color="#d8dddc"/>
     </linearGradient>
   </defs>
-  <g fill="url(#metal)" stroke="#101214" stroke-width="1.5" stroke-linejoin="miter" filter="url(#glow)">
-    <path d="M29 45h71v175l-41-36V78L29 45Z"/>
-    <path d="M132 45h105l-19 32h-68v14l63 24v57l-62 52-19-17v-95l38 14v32l18-15v-8l-56-21V64l19-19Z"/>
+  <g fill="url(#metal)" stroke="#101214" stroke-width=".7" stroke-linejoin="miter" filter="url(#glow)">
+    <path d="M0 0h84v218l-50.5-47V34.5L0 0Z"/>
+    <path d="M122 0h134l-24 40h-93.5v22l92.5 32.5v76.2L128.7 256l-32.6-28.7v-124.6l42.1 14.8v74.1l44.5-35.7v-39.2L96.1 84.9V25.5L122 0Z"/>
   </g>
 </svg>

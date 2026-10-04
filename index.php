@@ -20,7 +20,7 @@ define('IRONSHIELD_APP', true);
 require_once __DIR__ . '/bot/discord.php';
 require_once __DIR__ . '/includes/storage.php';
 $route = (string)($_GET['route'] ?? '');
-if (strtolower((string)(getenv('VERCEL') ?: '')) === '1' && !ironshield_storage_enabled() && $route !== '') {
+if (strtolower((string)(getenv('VERCEL') ?: '')) === '1' && !ironshield_storage_enabled()) {
     json_response(503, ['error' => 'DATABASE_URL ist auf Vercel erforderlich, damit Sitzungen, Tickets und Dashboard-Einstellungen dauerhaft gespeichert werden.']);
 }
 if (PHP_SAPI === 'cli-server' && !defined('IRONSHIELD_API_ENTRY')) {
