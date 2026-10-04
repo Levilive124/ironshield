@@ -63,6 +63,8 @@ Die Website-Einladelinks fordern keine Berechtigung zum Erstellen von Kanälen o
 
 Rufe nach einem Deployment `https://bot-ironshield-dash.vercel.app/api/health.php` direkt im Browser auf. Bei korrekt ausgeführter PHP-Funktion muss JSON `{"ok":true,"service":"ironshield-api"}` erscheinen. HTML, eine Vercel-Fehlerseite oder ein Redirect bedeutet, dass der API-Endpunkt nicht als PHP-Funktion bereitgestellt wird. Erst wenn dieser Health-Endpunkt JSON liefert, prüfe `https://bot-ironshield-dash.vercel.app/api/index.php?route=dashboard_data`; ohne Anmeldung ist `{"error":"login_required"}` die erwartete JSON-Antwort. Ein Datenbankfehler kommt erst danach und wird als JSON mit HTTP 503 ausgegeben.
 
+Alternativ kannst du in PowerShell im Projektordner `.\scripts\check-vercel-deployment.ps1` ausführen. Das Script prüft dieselben API-Endpunkte und liest aus der Discord-Weiterleitung die Callback-Adresse aus, ohne Discord zu öffnen oder Login-Daten einzutragen.
+
 ## Deployment
 
 Die Vercel-PHP-Ausführung verwendet `vercel-php@0.9.0` mit Node.js 22. Die ältere Runtime `0.5.2` basiert auf Node.js 14 und wird von Vercel nicht mehr akzeptiert. Direkte Aufrufe der alten `/index.php`-Seitenroute werden auf eine 404-API-Antwort umgeleitet; die Datei bleibt nur als serverseitige gemeinsame API-Logik vorhanden.

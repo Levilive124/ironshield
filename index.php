@@ -93,6 +93,9 @@ function discord_redirect_uri(): string
 {
     $host = strtolower((string)(parse_url('https://' . ($_SERVER['HTTP_HOST'] ?? ''), PHP_URL_HOST) ?: ''));
     if (in_array($host, ['localhost', '127.0.0.1'], true)) return 'http://' . $host . ':8000/api/index.php?route=callback';
+    // Pin the known Production hostname so a stale Vercel environment variable
+    // cannot send dashboard logins back to the retired Novium website.
+    if ($host === 'bot-ironshield-dash.vercel.app') return 'https://bot-ironshield-dash.vercel.app/api/index.php?route=callback';
     return config('DISCORD_REDIRECT_URI');
 }
 
